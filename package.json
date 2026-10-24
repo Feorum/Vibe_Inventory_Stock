@@ -1,0 +1,26 @@
+{
+  "name": "vibe-inventory-stock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "node --watch --env-file-if-exists=.env server/index.js",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "playwright test",
+    "icons": "node scripts/generate-icons.js",
+    "backup": "node --env-file-if-exists=.env scripts/backup.js",
+    "import:varka": "node scripts/import-varka.js",
+    "user:add": "node --env-file-if-exists=.env scripts/user-add.js"
+  },
+  "dependencies": {
+    "express": "5.3.0",
+    "read-excel-file": "9.3.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

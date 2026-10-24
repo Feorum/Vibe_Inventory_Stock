@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#293d32" />
+    <meta
+      name="description"
+      content="VARKA café inventory: counts, deliveries and team essentials."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="VARKA" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/varka.css" />
+    <script type="module" src="/varka.js"></script>
+    <title>VARKA · Café inventory</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <a href="/" class="brand"
+        ><img src="/icons/icon.svg" width="42" height="42" alt="" /><span
+          >VARKA<small data-i18n="brandCaption"></small></span
+      ></a>
+      <div class="actions">
+        <span id="connection" class="connection"></span
+        ><button id="language" class="button subtle compact" type="button">
+          RU</button
+        ><button
+          id="install"
+          class="button subtle compact"
+          type="button"
+          data-i18n="install"
+        ></button
+        ><button
+          id="logout"
+          class="button subtle compact"
+          type="button"
+          data-i18n="lock"
+          hidden
+        ></button>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div id="notice" class="notice" role="status" hidden></div>
+      <div id="pending" class="notice pending-banner" hidden>
+        <span data-i18n="uncertain"></span
+        ><button
+          id="retry"
+          class="button primary compact"
+          type="button"
+          data-i18n="retry"
+        ></button>
+      </div>
+      <section id="login-panel" class="login-panel" hidden>
+        <p class="eyebrow">VARKA / STOCK</p>
+        <h1 data-i18n="welcome"></h1>
+        <p class="muted" data-i18n="signInHelp"></p>
+        <form id="login-form">
+          <label for="email" data-i18n="email"></label
+          ><input
+            id="email"
+            type="email"
+            autocomplete="username"
+            required
+          /><label for="code" data-i18n="accessCode"></label
+          ><input
+            id="code"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button
+            class="button primary"
+            type="submit"
+            data-i18n="signIn"
+          ></button>
+        </form>
+      </section>
+      <div id="workspace" hidden>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">VARKA / <span id="section-label"></span></p>
+            <h1 id="heading"></h1>
+            <p id="subtitle" class="muted"></p>
+          </div>
+          <div class="actions">
+            <button
+              id="refresh"
+              class="button subtle"
+              type="button"
+              data-i18n="refresh"
+            ></button
+            ><button
+              id="primary-action"
+              class="button primary"
+              type="button"
+            ></button>
+          </div>
+        </section>
+        <nav class="main-nav" aria-label="Main navigation">
+          <button type="button" data-view="stock" data-i18n="stock"></button
+          ><button type="button" data-view="count" data-i18n="count"></button
+          ><button
+            type="button"
+            data-view="catalog"
+            data-i18n="catalog"
+          ></button
+          ><button
+            type="button"
+            data-view="history"
+            data-i18n="history"
+          ></button
+          ><button
+            type="button"
+            data-view="information"
+            data-i18n="information"
+          ></button
+          ><button
+            type="button"
+            data-view="profile"
+            data-i18n="profile"
+          ></button>
+        </nav>
+        <section id="stats" class="stats">
+          <article class="stat">
+            <span data-i18n="activeProducts"></span
+            ><strong id="stat-active">—</strong
+            ><small data-i18n="cafeWide"></small>
+          </article>
+          <article class="stat warm">
+            <span data-i18n="runningLow"></span><strong id="stat-low">—</strong
+            ><small data-i18n="lowHelp"></small>
+          </article>
+          <article class="stat">
+            <span data-i18n="needsCheck"></span
+            ><strong id="stat-check">—</strong
+            ><small data-i18n="checkHelp"></small>
+          </article>
+        </section>
+        <div id="filters" class="filters">
+          <input
+            id="search"
+            type="search"
+            aria-label="Search products"
+          /><select id="category-filter" aria-label="Category"></select
+          ><button
+            id="low-filter"
+            class="button subtle"
+            type="button"
+            aria-pressed="false"
+            data-i18n="lowOnly"
+          ></button>
+        </div>
+        <section id="view-stock" class="panel">
+          <div class="panel-title">
+            <h2 data-i18n="yourShelf"></h2>
+            <span id="synced" class="muted"></span>
+          </div>
+          <div id="stock-list" aria-live="polite"></div>
+        </section>
+        <section id="view-count" hidden>
+          <div id="session-picker" class="panel">
+            <div class="panel-title">
+              <h2 data-i18n="inventorySessions"></h2>
+            </div>
+            <p class="panel-padding muted" data-i18n="sessionHelp"></p>
+            <div id="session-list"></div>
+          </div>
+          <div id="count-workspace" hidden>
+            <div class="session-strip">
+              <div>
+                <strong id="session-name"></strong>
+                <p id="draft-status" class="muted" role="status"></p>
+              </div>
+              <div class="actions">
+                <button
+                  id="session-refresh"
+                  class="button subtle"
+                  type="button"
+                  data-i18n="reviewChecklist"
+                ></button
+                ><button
+                  id="clear-draft"
+                  class="button subtle"
+                  type="button"
+                  data-i18n="clearDraft"
+                ></button
+                ><button
+                  id="session-back"
+                  class="button subtle"
+                  type="button"
+                  data-i18n="closeView"
+                ></button>
+              </div>
+            </div>
+            <div id="count-list" class="panel"></div>
+            <form id="submit-form" class="panel submission">
+              <label class="check-label"
+                ><input id="keep-current" type="checkbox" /><span
+                  data-i18n="keepCurrent"
+                ></span></label
+              ><label class="check-label"
+                ><input id="incomplete" type="checkbox" /><span
+                  data-i18n="incomplete"
+                ></span
+              ></label>
+              <div class="actions">
+                <span id="count-summary" class="muted"></span
+                ><button
+                  id="submit-count"
+                  class="button primary"
+                  type="submit"
+                  data-i18n="submitCount"
+                ></button>
+              </div>
+            </form>
+          </div>
+        </section>
+        <section id="view-catalog" class="panel" hidden>
+          <div class="panel-title">
+            <h2 data-i18n="catalog"></h2>
+            <label class="check-label"
+              ><input id="show-inactive" type="checkbox" /><span
+                data-i18n="showInactive"
+              ></span
+            ></label>
+          </div>
+          <p id="staged-changes" class="panel-padding muted" hidden></p>
+          <div id="catalog-list"></div>
+        </section>
+        <section id="view-history" class="panel" hidden>
+          <div class="panel-title">
+            <h2 data-i18n="history"></h2>
+            <span class="muted" data-i18n="historyHelp"></span>
+          </div>
+          <div id="history-list"></div>
+          <button
+            id="more-history"
+            class="button subtle more"
+            type="button"
+            data-i18n="loadMore"
+            hidden
+          ></button>
+        </section>
+        <section id="view-information" hidden>
+          <div class="information-grid">
+            <article class="panel">
+              <div class="panel-title">
+                <h2 data-i18n="reminders"></h2>
+                <button
+                  id="add-note"
+                  class="button subtle compact"
+                  type="button"
+                  data-i18n="add"
+                ></button>
+              </div>
+              <div id="reminder-list"></div>
+            </article>
+            <article class="panel">
+              <div class="panel-title">
+                <h2 data-i18n="yellowCards"></h2>
+                <button
+                  id="add-card"
+                  class="button subtle compact"
+                  type="button"
+                  data-i18n="add"
+                ></button>
+              </div>
+              <div id="card-list"></div>
+            </article>
+          </div>
+        </section>
+        <section id="view-profile" hidden>
+          <div class="information-grid">
+            <article class="panel panel-padding">
+              <h2 data-i18n="yourProfile"></h2>
+              <p id="identity" class="muted"></p>
+              <form id="profile-form">
+                <label for="display-name" data-i18n="displayName"></label
+                ><input id="display-name" maxlength="80" /><button
+                  class="button primary"
+                  type="submit"
+                  data-i18n="save"
+                ></button>
+              </form>
+            </article>
+            <article id="owner-settings" class="panel panel-padding" hidden>
+              <h2 data-i18n="notifications"></h2>
+              <form id="settings-form">
+                <label class="check-label"
+                  ><input id="alerts-enabled" type="checkbox" /><span
+                    data-i18n="enableReports"
+                  ></span></label
+                ><label for="report-mode" data-i18n="reportMode"></label
+                ><select id="report-mode">
+                  <option value="LOW" data-i18n="onlyLow"></option>
+                  <option value="ALL" data-i18n="allActive"></option>
+                </select>
+                <p class="hint" data-i18n="deliveryHelp"></p>
+                <button
+                  class="button primary"
+                  type="submit"
+                  data-i18n="save"
+                ></button>
+              </form>
+              <div class="owner-buttons">
+                <button
+                  id="manage-users"
+                  class="button subtle"
+                  type="button"
+                  data-i18n="staffAccess"
+                ></button
+                ><button
+                  id="delivery-queue"
+                  class="button subtle"
+                  type="button"
+                  data-i18n="deliveryQueue"
+                ></button>
+              </div>
+            </article>
+          </div>
+        </section>
+        <footer class="page-footer">
+          <span data-i18n="footer"></span
+          ><span>VARKA · <span id="product-total"></span></span>
+        </footer>
+      </div>
+    </main>
+    <dialog id="form-dialog" aria-labelledby="dialog-title">
+      <form id="dialog-form">
+        <div class="dialog-heading">
+          <h2 id="dialog-title"></h2>
+          <button
+            type="button"
+            class="icon-button"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div id="dialog-fields"></div>
+        <p id="dialog-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="button subtle"
+            data-close
+            data-i18n="cancel"
+          ></button
+          ><button
+            id="dialog-save"
+            class="button primary"
+            type="submit"
+            data-i18n="save"
+          ></button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="install-dialog" aria-labelledby="install-title">
+      <div class="dialog-heading">
+        <h2 id="install-title" data-i18n="install"></h2>
+        <button class="icon-button" type="button" data-close aria-label="Close">
+          ×
+        </button>
+      </div>
+      <p data-i18n="installHelp"></p>
+      <p class="hint" data-i18n="offlineHelp"></p>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

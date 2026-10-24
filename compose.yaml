@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_PATH: /app/data/varka.sqlite
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD to at least 12 characters in .env}
+      OWNER_EMAIL: ${OWNER_EMAIL:?Set OWNER_EMAIL to the owner's email in .env}
+      TRUST_PROXY: 1
+      TELEGRAM_DELIVERY_ENABLED: ${TELEGRAM_DELIVERY_ENABLED:-false}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - inventory_data:/app/data
+    expose:
+      - "3000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN to your public hostname in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  inventory_data:
+  caddy_data:
+  caddy_config:

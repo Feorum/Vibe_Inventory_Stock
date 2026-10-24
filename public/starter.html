@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#293d32" />
+    <meta
+      name="description"
+      content="A calmer way to keep your coffee shop stocked. Track supplies, deliveries, and daily stock counts."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Daily Stock" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Daily Stock · Original starter demo</title>
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to inventory</a>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Daily Stock home"
+        ><img src="/icons/icon.svg" width="42" height="42" alt="" /><span
+          >daily stock<span class="brand-caption"
+            >A LITTLE ORDER. A BETTER DAY.</span
+          ></span
+        ></a
+      >
+      <div class="header-actions">
+        <span id="connection" class="connection"
+          ><span class="status-dot"></span>Connecting</span
+        ><button id="install" class="button subtle compact" type="button">
+          Install app</button
+        ><button id="logout" class="button subtle compact" type="button" hidden>
+          Lock shop
+        </button>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section id="login-panel" class="login-panel" hidden>
+        <p class="eyebrow">WELCOME BACK</p>
+        <h1>Your shop, in order.</h1>
+        <p class="muted">
+          Enter your shared shop password to open the inventory.
+        </p>
+        <form id="login-form">
+          <label for="password">Shop password</label
+          ><input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button class="button primary" type="submit">Open inventory</button>
+        </form>
+      </section>
+      <div id="workspace" hidden>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">THE COFFEE COUNTER / INVENTORY</p>
+            <h1>
+              Good days start<br />with a stocked shelf<span class="accent"
+                >.</span
+              >
+            </h1>
+            <p class="muted">
+              Keep an eye on the essentials. Get back to the good stuff.
+            </p>
+          </div>
+          <button id="add-item" class="button primary" type="button">
+            <span aria-hidden="true">＋</span> Add item
+          </button>
+        </section>
+        <section class="stats" aria-label="Inventory overview">
+          <article class="stat">
+            <span class="stat-label">Items on your shelf</span
+            ><strong id="stat-items">—</strong
+            ><span class="stat-caption">All your essentials, in one place</span>
+          </article>
+          <article class="stat warm">
+            <span class="stat-label"
+              >Need a top-up
+              <span class="small-dot" aria-hidden="true"></span></span
+            ><strong id="stat-low">—</strong
+            ><span class="stat-caption">At or below your minimum stock</span>
+          </article>
+          <article class="stat">
+            <span class="stat-label">Categories</span
+            ><strong id="stat-categories">—</strong
+            ><span class="stat-caption">A place for every little thing</span>
+          </article>
+        </section>
+        <section class="inventory-panel" aria-label="Stock management">
+          <div class="panel-heading">
+            <div class="tabs" aria-label="Inventory views">
+              <button
+                id="stock-tab"
+                class="tab active"
+                type="button"
+                aria-pressed="true"
+              >
+                Your inventory
+                <span id="item-count" class="count-badge">0</span></button
+              ><button
+                id="activity-tab"
+                class="tab"
+                type="button"
+                aria-pressed="false"
+              >
+                Activity
+              </button>
+            </div>
+            <button id="refresh" class="button subtle compact" type="button">
+              ↻ Refresh
+            </button>
+          </div>
+          <div id="stock-view">
+            <div class="filters">
+              <div class="search-wrap">
+                <span aria-hidden="true">⌕</span
+                ><input
+                  id="search"
+                  type="search"
+                  aria-label="Search inventory"
+                  placeholder="Find something on your shelf…"
+                />
+              </div>
+              <select id="category-filter" aria-label="Filter by category">
+                <option value="">All categories</option></select
+              ><button
+                id="low-filter"
+                class="button filter-button"
+                type="button"
+                aria-pressed="false"
+              >
+                Low stock only
+              </button>
+            </div>
+            <div class="table-labels" aria-hidden="true">
+              <span>ITEM / CATEGORY</span><span>ON HAND</span><span>STATUS</span
+              ><span>QUICK ACTION</span>
+            </div>
+            <div id="item-list" class="item-list" aria-live="polite">
+              <p class="empty">Loading your shelf…</p>
+            </div>
+          </div>
+          <div id="activity-view" hidden>
+            <p class="activity-intro muted">
+              The latest 100 stock changes. Every delivery, every count.
+            </p>
+            <div
+              id="activity-list"
+              class="activity-list"
+              aria-live="polite"
+            ></div>
+          </div>
+          <footer class="panel-footer">
+            <span id="results">Loading inventory</span
+            ><span id="synced">Waiting for first sync</span>
+          </footer>
+        </section>
+        <footer class="page-footer">
+          <span>Made for the rhythm of your coffee shop.</span
+          ><span
+            >Small details. Smooth service.
+            <span aria-hidden="true">✳</span></span
+          >
+        </footer>
+      </div>
+    </main>
+    <dialog id="item-dialog" aria-labelledby="item-title">
+      <form id="item-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">MAKE ROOM ON THE SHELF</p>
+            <h2 id="item-title">Add an essential</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close
+            aria-label="Close add item"
+          >
+            ×
+          </button>
+        </div>
+        <label for="item-name">Item name</label
+        ><input
+          id="item-name"
+          name="name"
+          maxlength="100"
+          placeholder="e.g. House blend"
+          required
+        />
+        <div class="form-grid">
+          <div>
+            <label for="item-category">Category</label
+            ><select id="item-category" name="category" required></select>
+          </div>
+          <div>
+            <label for="item-unit">Unit</label
+            ><select id="item-unit" name="unit" required></select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div>
+            <label for="item-quantity">Opening quantity</label
+            ><input
+              id="item-quantity"
+              name="quantity"
+              type="number"
+              inputmode="decimal"
+              min="0"
+              max="1000000"
+              step="0.001"
+              value="0"
+              required
+            />
+          </div>
+          <div>
+            <label for="item-minimum">Low stock minimum</label
+            ><input
+              id="item-minimum"
+              name="minimum"
+              type="number"
+              inputmode="decimal"
+              min="0"
+              max="1000000"
+              step="0.001"
+              value="0"
+              required
+            />
+          </div>
+        </div>
+        <p class="hint">We’ll flag this item when stock reaches the minimum.</p>
+        <p id="item-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button class="button subtle" type="button" data-close>Cancel</button
+          ><button class="button primary" type="submit">
+            Add to inventory
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="movement-dialog" aria-labelledby="movement-title">
+      <form id="movement-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">KEEP THINGS UP TO DATE</p>
+            <h2 id="movement-title">Update stock</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close
+            aria-label="Close stock update"
+          >
+            ×
+          </button>
+        </div>
+        <p id="movement-current" class="muted"></p>
+        <label for="movement-type">What changed?</label
+        ><select id="movement-type" name="type">
+          <option value="in">Stock in · Delivery or return</option>
+          <option value="out">Stock out · Used or wasted</option>
+          <option value="count">
+            Stock count · Set physical quantity
+          </option></select
+        ><label id="movement-quantity-label" for="movement-quantity"
+          >Quantity to add</label
+        ><input
+          id="movement-quantity"
+          name="quantity"
+          type="number"
+          inputmode="decimal"
+          min="0.001"
+          max="1000000"
+          step="0.001"
+          required
+        />
+        <p id="count-help" class="hint" hidden>
+          A count replaces the current balance with what is physically on your
+          shelf.
+        </p>
+        <label for="movement-note"
+          >Note <span class="muted">(optional)</span></label
+        ><input
+          id="movement-note"
+          name="note"
+          maxlength="300"
+          placeholder="e.g. Morning delivery, supplier invoice…"
+        />
+        <p id="movement-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button class="button subtle" type="button" data-close>Cancel</button
+          ><button class="button primary" type="submit">
+            Save stock change
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="install-dialog" aria-labelledby="install-title">
+      <div class="dialog-heading">
+        <h2 id="install-title">Your shelf, a tap away</h2>
+        <button
+          class="icon-button"
+          type="button"
+          data-close
+          aria-label="Close install instructions"
+        >
+          ×
+        </button>
+      </div>
+      <p>Open this app over HTTPS, then add it to your home screen.</p>
+      <p>
+        <strong>iPhone:</strong> in Safari, tap Share, then “Add to Home Screen”
+        and “Add”.
+      </p>
+      <p>
+        <strong>Samsung:</strong> in Chrome or Samsung Internet, open the
+        browser menu and choose “Install app” or “Add to Home screen”.
+      </p>
+      <p class="hint">
+        Inventory stays available to view offline after your first visit.
+        Connect to record stock changes.
+      </p>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>
