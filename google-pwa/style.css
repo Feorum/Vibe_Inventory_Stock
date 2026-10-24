@@ -1,0 +1,172 @@
+:root {
+  color-scheme: light;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color: #20382b;
+  background: #f5f3eb;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+header {
+  background: #234b36;
+  color: white;
+  padding: 18px max(16px, calc((100vw - 860px) / 2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+header strong {
+  letter-spacing: 0.16em;
+  font-size: 24px;
+}
+header span {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+}
+header button {
+  font-size: 12px;
+}
+main {
+  max-width: 900px;
+  margin: auto;
+  padding: 16px;
+}
+h1 {
+  font-size: 25px;
+  margin: 0 0 12px;
+}
+h2 {
+  font-size: 19px;
+  margin: 0 0 12px;
+}
+p {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.panel,
+.product {
+  padding: 20px;
+  border: 1px solid #d9dfd4;
+  border-radius: 16px;
+  background: #fffef9;
+  margin-bottom: 14px;
+}
+label {
+  display: block;
+  margin: 12px 0;
+  line-height: 1.45;
+}
+input,
+select,
+button {
+  font: inherit;
+  min-height: 46px;
+  border: 1px solid #aab8ac;
+  border-radius: 9px;
+  padding: 10px;
+  max-width: 100%;
+}
+input,
+select {
+  background: white;
+  color: #20382b;
+}
+input:not([type="checkbox"]) {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+}
+input[type="checkbox"] {
+  min-height: 20px;
+  width: 20px;
+  flex-shrink: 0;
+}
+button {
+  cursor: pointer;
+  background: #edf1e6;
+  color: #20382b;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  color: white;
+  background: #234b36;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.check {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+.product h2 {
+  margin-bottom: 4px;
+}
+.meta {
+  color: #56675b;
+  font-size: 13px;
+}
+.balance {
+  font-size: 22px;
+  margin: 10px 0;
+}
+.zone {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(75px, 110px);
+  gap: 10px;
+  align-items: end;
+}
+.zone select {
+  margin-bottom: 12px;
+  width: 100%;
+}
+.conflict {
+  border-left: 4px solid #a64328;
+  padding-left: 12px;
+  margin: 15px 0;
+}
+#message {
+  padding: 12px;
+  background: #e8eedf;
+  border-radius: 10px;
+}
+#message.error {
+  color: #802b18;
+  background: #ffe8dc;
+}
+:focus-visible {
+  outline: 3px solid #b67a2d;
+  outline-offset: 3px;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 480px) {
+  main {
+    padding: 10px;
+  }
+  .panel,
+  .product {
+    padding: 15px;
+  }
+  header {
+    padding: 16px;
+  }
+  .actions button {
+    width: 100%;
+  }
+}

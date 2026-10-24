@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#234b36" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
+    <title>VARKA · Google mode</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon.svg" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <header>
+      <div><strong>VARKA</strong><span>Google Sheets · prototype</span></div>
+      <button id="lock" hidden>Lock &amp; clear saved data</button>
+    </header>
+    <main>
+      <p id="message" role="status" aria-live="polite">
+        Connect your existing VARKA Apps Script deployment.
+      </p>
+      <section class="panel" id="connect-panel">
+        <h1>Connect to the café</h1>
+        <p>
+          The spreadsheet stays private. Use your existing individual VARKA
+          access code, not your Google password.
+        </p>
+        <form id="connect-form">
+          <label
+            >Apps Script deployment URL<input
+              id="endpoint"
+              type="url"
+              placeholder="https://script.google.com/macros/s/…/exec"
+              required
+              autocomplete="off"
+          /></label>
+          <label
+            >Email<input
+              id="email"
+              type="email"
+              required
+              autocomplete="username"
+          /></label>
+          <label
+            >Individual access code<input
+              id="code"
+              type="password"
+              required
+              autocomplete="current-password"
+              maxlength="200"
+          /></label>
+          <button class="primary" id="connect">
+            Sign in &amp; synchronize
+          </button>
+        </form>
+        <p>
+          Codes and login tokens are never saved on this device. Cached
+          inventory and drafts are unencrypted; use only trusted devices. Sign
+          in again after reopening to synchronize.
+        </p>
+        <details>
+          <summary>Install on your phone</summary>
+          <p>
+            First open this HTTPS page online. Samsung: browser menu → Install
+            app. iPhone: Safari → Share → Add to Home Screen. Offline data is
+            available only on devices that have already connected.
+          </p>
+        </details>
+      </section>
+      <section id="workspace" hidden>
+        <div class="panel">
+          <h1>Inventory</h1>
+          <p id="identity"></p>
+          <p id="sync-status"></p>
+          <div class="actions">
+            <button id="refresh">Refresh from Google Sheets</button
+            ><button id="start">Start count session</button>
+          </div>
+          <p id="mode"></p>
+        </div>
+        <section id="pending-panel" class="panel" hidden>
+          <h2>Submission awaiting confirmation</h2>
+          <p>
+            Your original request is saved. Retry uses the same operation ID, so
+            a lost reply does not duplicate the count. Do not submit the same
+            count from another device.
+          </p>
+          <button id="retry" class="primary">Retry safely</button>
+        </section>
+        <section id="conflicts-panel" class="panel" hidden>
+          <h2>Review changed products</h2>
+          <p>
+            Google Sheets changed after you entered these counts. Refreshing
+            does not overwrite your draft or accept a new balance automatically.
+          </p>
+          <div id="conflicts"></div>
+        </section>
+        <div class="panel">
+          <label
+            >Search products<input
+              id="search"
+              type="search"
+              placeholder="Name or category"
+          /></label>
+          <p id="count-status"></p>
+        </div>
+        <div id="products"></div>
+        <section id="submit-panel" class="panel" hidden>
+          <label class="check"
+            ><input id="keep-current" type="checkbox" />Keep blank items
+            unchanged (blank is never zero)</label
+          >
+          <button id="submit" class="primary">Synchronize counts</button>
+          <p>
+            Offline counts stay on this device until you reconnect, sign in, and
+            synchronize. There is no background submission.
+          </p>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

@@ -6,6 +6,10 @@ The supplied workbook has been imported into the local, ignored `data/varka.sqli
 
 This is a migration of the uploaded snapshot, not continuous Google Sheets synchronization. Freeze spreadsheet writes and use a fresh, reconciled export for the eventual production cutover.
 
+## No rented host yet? Google Sheets prototype
+
+The separate [Google-mode setup guide](docs/google-mode.md) provides a static PWA for GitHub Pages and a small bridge added to the existing Apps Script project. It uses the **same live Google workbook** for product/balance reads and count submissions, with per-device offline snapshots/drafts and explicit conflict-aware synchronization. No Node server is needed for this mode. Bridge writes default off; the Google account owner must deploy/configure it and complete the real-phone connection test. This does not continuously mirror Sheets into SQLite or replace every workflow of the original app.
+
 ## Run
 
 Install Node.js 24, then run from the checkout:

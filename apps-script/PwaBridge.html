@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>VARKA connection</title>
+  </head>
+  <body>
+    <p>VARKA secure inventory connection</p>
+    <script>
+      // The configuration is owner-controlled and JSON-escaped in pwaPage_.
+      const configuration = <?!= configuration ?>;
+      const send = (message) => window.top.postMessage({
+        ...message, channel: configuration.channel, protocol: 'varka-google-1'
+      }, configuration.origin);
+      window.addEventListener('message', (event) => {
+        const message = event.data;
+        if (event.source !== window.top || event.origin !== configuration.origin ||
+            !message || message.channel !== configuration.channel ||
+            message.protocol !== 'varka-google-1') return;
+        if (message.type === 'hello') { send({ type: 'ready' }); return; }
+        if (message.type !== 'request' || typeof message.id !== 'string' ||
+            !/^[a-f0-9-]{20,80}$/.test(message.id)) return;
+        google.script.run
+          .withSuccessHandler((result) => send({ type: 'response', id: message.id, result }))
+          .withFailureHandler(() => send({ type: 'response', id: message.id,
+            result: { ok: false, error: 'GOOGLE_EXECUTION_FAILED' } }))
+          .pwaDispatch(message.request);
+      });
+      // Apps Script has an outer frame and an inner googleusercontent frame.
+      // Announce from the inner frame, then pin that exact Window on the frontend.
+      send({ type: 'ready' });
+    </script>
+  </body>
+</html>

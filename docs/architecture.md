@@ -15,6 +15,8 @@ flowchart LR
 
 ## Implemented modules
 
+For the temporary no-Node-host alternative, see [Google mode](google-mode.md): a separate static PWA uses an origin-pinned Apps Script iframe bridge and the existing workbook as its only authoritative database. It does not mirror data into the SQLite instance described below. The original Node frontend and API remain unchanged.
+
 | Module                                                                | Responsibility                                                                                                                                  |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `server/database.js`, `server/varka/schema.js`                        | SQLite connection, WAL, schema initialization; VARKA tables are additive to the earlier starter tables                                          |

@@ -14,6 +14,7 @@
     "icons": "node scripts/generate-icons.js",
     "backup": "node --env-file-if-exists=.env scripts/backup.js",
     "import:varka": "node scripts/import-varka.js",
+    "build:google": "node scripts/build-google-pages.js",
     "user:add": "node --env-file-if-exists=.env scripts/user-add.js"
   },
   "dependencies": {
