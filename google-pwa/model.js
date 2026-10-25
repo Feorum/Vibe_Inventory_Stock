@@ -43,7 +43,12 @@ export function quantity(value, unit, sleeve = false) {
 export function buildSubmission(
   session,
   drafts,
-  { id = crypto.randomUUID(), keepCurrent = false } = {},
+  {
+    id = crypto.randomUUID(),
+    keepCurrent = false,
+    incomplete = false,
+    productChanges = [],
+  } = {},
 ) {
   if (!session || session.status !== "OPEN")
     throw Error("Start an inventory session online first.");
@@ -87,24 +92,31 @@ export function buildSubmission(
       locations,
     });
   }
-  if (!items.length)
+  for (const change of productChanges) {
+    if (change.active && !items.some((item) => item.id === change.id))
+      throw Error("Activation requires a physical count.");
+  }
+  if (!items.length && !productChanges.length)
     throw Error("Enter at least one count. Blank is not zero.");
   const missing =
     session.items.filter((item) => !item.checked).length - items.length;
-  if (missing && !keepCurrent)
+  if (missing && !keepCurrent && !incomplete)
     throw Error("Count every item or explicitly keep blank items unchanged.");
   return {
     id,
     sessionId: session.id,
     items,
-    incomplete: false,
+    incomplete: Boolean(incomplete),
+    ...(productChanges.length ? { productChanges } : {}),
     ...(keepCurrent ? { blankPolicy: "KEEP_CURRENT" } : {}),
   };
 }
 
 export function changedDrafts(snapshot, drafts) {
   const products = new Map(
-    (snapshot?.stock?.products || []).map((p) => [p.id, p]),
+    [...(snapshot?.catalog || []), ...(snapshot?.stock?.products || [])].map(
+      (p) => [p.id, p],
+    ),
   );
   const specs = new Map((snapshot?.session?.items || []).map((p) => [p.id, p]));
   return Object.keys(drafts).filter((id) => {
@@ -117,4 +129,26 @@ export function changedDrafts(snapshot, drafts) {
       JSON.stringify([...(drafts[id].zones || [])].sort())
     );
   });
+}
+
+export function effectiveSession(session, changes = [], catalog = []) {
+  if (!session) return session;
+  let items = session.items.map((p) => ({ ...p }));
+  for (const change of changes) {
+    const source = catalog.find((p) => p.id === change.id);
+    if (!source)
+      throw Error(
+        "Staged product no longer exists. Refresh and review the catalog.",
+      );
+    items = items.filter((p) => p.id !== change.id);
+    if (change.active)
+      items.push({
+        ...source,
+        previous: source.last,
+        sleeve: Boolean(source.sleeve),
+        zones: change.zones,
+        checked: false,
+      });
+  }
+  return { ...session, items };
 }

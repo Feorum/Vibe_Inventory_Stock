@@ -1,6 +1,6 @@
 // Relative URLs and a scope-specific cache also work at /Vibe_Inventory_Stock/.
 const PREFIX = `varka-google:${self.registration.scope}:`;
-const CACHE = `${PREFIX}shell-v1`;
+const CACHE = `${PREFIX}shell-v2`;
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const ASSETS = [
   "./app.js",
   "./model.js",
   "./transport.js",
+  "./features.js",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",

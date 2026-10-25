@@ -8,7 +8,7 @@ This is a migration of the uploaded snapshot, not continuous Google Sheets synch
 
 ## No rented host yet? Google Sheets prototype
 
-The separate [Google-mode setup guide](docs/google-mode.md) provides a static PWA for GitHub Pages and a small bridge added to the existing Apps Script project. It uses the **same live Google workbook** for product/balance reads and count submissions, with per-device offline snapshots/drafts and explicit conflict-aware synchronization. No Node server is needed for this mode. Bridge writes default off; the Google account owner must deploy/configure it and complete the real-phone connection test. This does not continuously mirror Sheets into SQLite or replace every workflow of the original app.
+The separate [Google-mode setup guide](docs/google-mode.md) provides a static PWA for GitHub Pages and an authenticated bridge added to the existing Apps Script project. It uses the **same live Google workbook** for stock/counting, deliveries/waste, catalog management, sessions, history/corrections, reminders/cards, profile and owner report settings. Per-device offline snapshots/count drafts and conflict-aware synchronization remain available; other mutations require a connection and have a durable operation journal. No Node server is needed for this mode. Bridge writes default off; the owner must deploy/configure it and complete the real-phone tests. Existing prototype users: follow **Updating the working prototype**, including the new `installPwaFeatures` function. This does not mirror Sheets into SQLite or expose historical migration/trigger administration as daily actions.
 
 ## Run
 

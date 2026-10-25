@@ -1,8 +1,23 @@
 # Temporary Google Sheets mode
 
-This is a separate, limited prototype: **GitHub Pages → Apps Script bridge → the existing private VARKA workbook**. No Node server, Google API key, service-account key, or public spreadsheet is required. The Node/SQLite application remains unchanged.
+This is the Google-backed application: **GitHub Pages → Apps Script bridge → the existing private VARKA workbook**. No Node server, Google API key, service-account key, or public spreadsheet is required. The Node/SQLite application remains unchanged.
 
-Implemented: existing individual sign-in, live active product/balance reads, explicit refresh, existing inventory-session creation, per-zone counts (including configured sleeves), offline shell/snapshots/count drafts, manual synchronization, revision-conflict review, and idempotent lost-reply recovery. Product editing, deliveries/waste, corrections, reminders, and reports remain in the original Apps Script UI for this prototype; they are not new offline workflows. “Synchronization” here means reading/writing the **same workbook**, not maintaining a second SQLite copy.
+Implemented: existing individual sign-in; stock/low/estimated/stale indicators; deliveries and waste with a reason; catalog creation/editing, units/packaging, minimums, intervals, zones, activation/deactivation and archival; session start/resume/expansion; per-zone and sleeve counts; explicit keep-blank/incomplete policies; atomic staged status/zone changes with counts; paginated immutable history and own-entry corrections (history-only or current-stock); reminders, yellow cards, display names; and owner-only Telegram report settings. Feature-screen navigation and forms have EN/RU labels (Profile switches language); some shared connection/count/status text remains bilingual or English.
+
+Offline: the app shell, inventory/catalog, and previously opened history/information/profile snapshots remain on each device; an open session's count drafts and staged checklist changes can be edited locally. Other stock/catalog/team-information mutations require a connection. “Synchronization” means reading/writing the **same workbook**, not maintaining a second SQLite copy. Access-code administration remains in private Script Properties, as in the original application. Historical pilot-specific hardcoded imports, catalog cleanup installers, Google Forms and trigger administration are deliberately not exposed as everyday PWA actions.
+
+## Updating the working prototype
+
+Do this on your **test copy** first:
+
+1. Back up the copied spreadsheet and current Apps Script source. Confirm `STOCK_SHEET_ID` still targets that copy.
+2. Replace **only `PwaBridge.gs`** with the current repository version. The original five files, `Inventory.html`, `PwaBridge.html`, and the existing `doGet` bridge hook stay in place.
+3. From the Apps Script editor, run **`installPwaFeatures`** as owner. It backs up the workbook before creating the `PwaOperations` journal. It does not create triggers, import counts, change products, or enable Telegram. Re-running it validates an already-installed journal without replacing its rows.
+4. **Deploy → Manage deployments → Edit → New version → Deploy**. Keep the existing `/exec` URL and access settings.
+5. On GitHub, run **Actions → Deploy Google-mode PWA** again. Reload the installed app after deployment so service-worker shell v2 can activate; sign in again. An older bridge leaves the new write actions disabled and shows an update notice.
+6. With `PWA_WRITES_ENABLED=true` on the copy, test each screen. Disable reports in the owner's settings if you do not want test submissions to send real notifications. No credentials should be pasted into GitHub or chat.
+
+Fresh installations need step 3 after adding the bridge below, before using the new workflows.
 
 ## 1. Publish the static phone interface
 
@@ -61,6 +76,24 @@ Then, preferably in your test copy:
 6. If a reply is lost, choose **Retry safely**. The PWA checks the original submission ID before retrying the identical stored body. Do not manually recreate the same count in another app/device while its outcome is unknown.
 
 **Existing post-commit side effects remain in force.** The original `webV5Submit` can rebuild dashboards and deliver Telegram reports according to your current settings. Disable reports through the original owner's settings for a notification-free test; no setting is silently changed by the bridge. Starting a session appends a journal entry even without submitting counts.
+
+### Additional workflow acceptance tests
+
+- Record a delivery and waste for a known product; verify the source Events rows, author, final balance and waste reason. Unknown stock must be physically counted first; overdraw and stale revisions must be rejected.
+- Create/edit a test product, set zones/minimum/interval, deactivate then archive it. Existing categories are reused; historical unit changes remain blocked by the original backend.
+- Resume an owned open session through Sessions. Add newly active products using the explicit expansion action. Stage status/zones in Catalog and return to Stock & count: a newly activated product requires a count, and every selected zone must be filled. Count submission carries those catalog changes in the same original v9 envelope.
+- Open History; correct your own entry first in HISTORY_ONLY mode and verify current stock did not change. CURRENT mode must reject newer intervening movements. Original entries remain unchanged and correction revisions are displayed separately.
+- Add/edit/complete a reminder, add/remove a yellow card, and change your display name. Confirm attribution and stale-version behavior.
+- Only the effective script owner's account should see Telegram report settings. Staff cannot bypass that permission by calling the bridge directly.
+- Open History and Information online, then reopen offline. Saved content should be readable while all server-write actions stay disabled. Inventory count drafts remain editable.
+
+### Recovery of non-count operations
+
+Deliveries, waste, catalog changes, reminders/cards, profiles/settings, corrections and checklist expansions now use an owner-installed **PwaOperations** journal. The device persists `{id, kind, payload}` before sending; the bridge claims the ID under a script lock, stores an actor-bound UTF-8 request hash, then calls the explicit original operation outside the journal lock. Concurrent retries cannot run that operation twice. Successful results are COMMITTED; definite pre-write business failures are REJECTED. The exact ID cannot be reused by another account or with another payload.
+
+An exception, stopped Apps Script execution, or failure between the original write and journal acknowledgement can leave **UNKNOWN**. This is not proof of rollback. **Retry safely checks the journal but never re-executes an UNKNOWN mutation.** First allow the original execution to finish, then check again. If it stays UNKNOWN, the owner must inspect the matching original Events/ProductSync/card/reminder/profile/settings records and Apps Script execution logs. Do not clear the browser record, edit the count to a new ID, or recreate it on another device as a workaround.
+
+For a confirmed interrupted operation, an owner who understands the records can reconcile its journal row _after the original execution has ended_: only if the intended write is verified, set column F to `COMMITTED` and G to `{"ok":true,"manuallyReconciled":true}`. Only if it is verified that **no part of the write happened**, set F to `REJECTED` and G to `{"rejected":true,"error":"Owner verified no write occurred"}`. Partial writes need domain-specific repair first, not either shortcut. Leave all identity/hash columns and stock history intact. If the outcome cannot be proved, keep UNKNOWN and seek assistance. This deliberately favors preventing duplicate stock changes over guessing at an uncertain result.
 
 ## Transport and security
 

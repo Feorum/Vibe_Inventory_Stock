@@ -1,4 +1,5 @@
 import { GoogleTransport, deploymentUrl } from "./transport.js";
+import { createFeatures } from "./features.js";
 import {
   accountKey,
   readRecord,
@@ -6,6 +7,7 @@ import {
   buildSubmission,
   changedDrafts,
   normalizeSnapshot,
+  effectiveSession,
 } from "./model.js";
 const $ = (selector) => document.querySelector(selector);
 const initial = () => ({
@@ -16,6 +18,8 @@ const initial = () => ({
   startPending: null,
   keepCurrent: false,
   lastSync: null,
+  featurePending: null,
+  productChanges: [],
 });
 let config = readRecord(localStorage, "varka-google:configuration") || {};
 let record = initial();
@@ -25,7 +29,59 @@ let transport,
   writesEnabled = false,
   busy = false,
   storageOkay = true;
+let featuresEnabled = false;
 let conflicts = [];
+const checklist = () =>
+  effectiveSession(
+    record.session,
+    record.productChanges,
+    record.snapshot?.catalog,
+  );
+const hasPending = () =>
+  Boolean(record.pending || record.startPending || record.featurePending);
+const features = createFeatures({
+  record: () => record,
+  config: () => config,
+  rpc,
+  persist,
+  render,
+  message,
+  guard,
+  pending: hasPending,
+  busy: () => busy,
+  supported: () => featuresEnabled || Boolean(record.featuresSupported),
+  online: () => authenticated && navigator.onLine,
+  writable: () => writesEnabled && storageOkay,
+  mutate: async (kind, payload) => {
+    if (hasPending()) throw Error("Resolve the pending operation first.");
+    if (
+      !featuresEnabled ||
+      !writesEnabled ||
+      !authenticated ||
+      !navigator.onLine
+    )
+      throw Error("Sign in online with the updated bridge and writes enabled.");
+    record.featurePending = { id: crypto.randomUUID(), kind, payload };
+    persist();
+    controls();
+    await retryFeature();
+  },
+  resumeSession: async (id) => {
+    if (hasPending()) throw Error("Resolve the pending operation first.");
+    if (Object.keys(record.drafts).length || record.productChanges?.length)
+      throw Error(
+        "Keep or resolve the current draft before switching sessions.",
+      );
+    const snapshot = await rpc("load", { sessionId: id });
+    if (!snapshot.session || snapshot.session.by !== config.email)
+      throw Error("OWN_SESSION_ONLY");
+    record.session = snapshot.session;
+    record.snapshot = normalizeSnapshot(snapshot);
+    persist();
+    features.stock();
+    render();
+  },
+});
 const key = () => accountKey(config.endpoint, config.email);
 const text = (tag, value, className) => {
   const element = document.createElement(tag);
@@ -49,7 +105,7 @@ function persist() {
   }
 }
 function controls() {
-  const pending = Boolean(record.pending || record.startPending);
+  const pending = hasPending();
   const connected = authenticated && navigator.onLine;
   $("#connect").disabled = busy;
   $("#refresh").disabled = busy || !connected;
@@ -79,6 +135,8 @@ function controls() {
   $("#conflicts")
     .querySelectorAll("button")
     .forEach((node) => (node.disabled = busy || pending));
+  $("#incomplete").disabled = busy || pending;
+  features.controls();
 }
 async function guard(action) {
   if (busy) return;
@@ -111,6 +169,7 @@ function restore() {
   record = readRecord(localStorage, key()) || initial();
   // A closed session's metadata may remain for audit, but never reopen it locally.
   $("#keep-current").checked = Boolean(record.keepCurrent);
+  $("#incomplete").checked = Boolean(record.incomplete);
 }
 async function rpc(method, body = {}) {
   if (!authenticated) throw Error("Sign in online to synchronize.");
@@ -175,7 +234,7 @@ function field(spec, zoneId, draft) {
       entry.countedAt = new Date().toISOString();
       persist();
       conflicts = changedDrafts(
-        { ...record.snapshot, session: record.session },
+        { ...record.snapshot, session: checklist() },
         record.drafts,
       );
       renderConflicts();
@@ -229,6 +288,25 @@ function renderConflicts() {
   for (const id of conflicts) {
     const current = record.snapshot?.stock.products.find((p) => p.id === id);
     const draft = record.drafts[id];
+    if (!draft || record.productChanges?.some((c) => c.id === id)) {
+      const card = text(
+        "div",
+        `Staged checklist change ${id} needs review. Discard it and re-open the catalog to choose the current status/zones.`,
+        "conflict",
+      );
+      card.append(
+        button("Discard staged change and its draft", () => {
+          record.productChanges = (record.productChanges || []).filter(
+            (c) => c.id !== id,
+          );
+          delete record.drafts[id];
+          persist();
+          render();
+        }),
+      );
+      target.append(card);
+      continue;
+    }
     const spec = record.session?.items.find((p) => p.id === id);
     const card = document.createElement("div");
     card.className = "conflict";
@@ -277,6 +355,8 @@ function render() {
   $("#workspace").hidden = !snapshot;
   $("#lock").hidden = !snapshot;
   if (!snapshot) {
+    features.clear();
+    features.render();
     controls();
     return;
   }
@@ -289,13 +369,21 @@ function render() {
     : writesEnabled
       ? "Google Sheets is the shared database. Refresh to see changes from other devices."
       : "Read-only connection. The owner must enable PWA_WRITES_ENABLED after testing.";
-  const session = record.session;
+  const session = checklist();
   const counting = session?.status === "OPEN";
   $("#count-status").textContent = session
     ? `Session ${session.id} · ${session.status}. ${counting ? "Every assigned storage zone is required for a counted product." : "Start a new session for another count."}`
     : "Start a session online before entering offline counts.";
   $("#submit-panel").hidden = !counting;
   conflicts = changedDrafts({ ...snapshot, session }, record.drafts);
+  for (const change of record.productChanges || []) {
+    if (
+      snapshot.catalog.find((p) => p.id === change.id)?.version !==
+        change.version &&
+      !conflicts.includes(change.id)
+    )
+      conflicts.push(change.id);
+  }
   renderConflicts();
   const list = $("#products");
   list.replaceChildren();
@@ -308,6 +396,14 @@ function render() {
     )
       continue;
     const current = snapshot.stock.products.find((p) => p.id === spec.id);
+    const low =
+      current &&
+      (current.low ||
+        current.last === 0 ||
+        (current.last != null &&
+          current.minimum != null &&
+          current.last <= current.minimum));
+    if ($("#only-low").checked && !low) continue;
     const card = document.createElement("article");
     card.className = "product";
     card.append(
@@ -324,6 +420,19 @@ function render() {
       card.append(
         text("p", "Physical check overdue / Пора пересчитать", "meta"),
       );
+    if (low) card.append(text("p", "Low / Заканчивается", "meta"));
+    if (current?.approx)
+      card.append(text("p", "Estimated / Приблизительно", "meta"));
+    if (current?.minimum == null)
+      card.append(text("p", "Minimum not set / Минимум не задан", "meta"));
+    if (current?.checked)
+      card.append(
+        text(
+          "p",
+          `Last count / Последний пересчёт: ${new Date(current.checked).toLocaleString(undefined, { timeZone: "Europe/Minsk" })}`,
+          "meta",
+        ),
+      );
     if (counting && !spec.checked) {
       for (const zone of spec.zones?.length ? spec.zones : ["unassigned"])
         card.append(field(spec, zone, record.drafts[spec.id]));
@@ -335,9 +444,10 @@ function render() {
     list.append(card);
   }
   controls();
+  features.render();
 }
 async function start() {
-  if (Object.keys(record.drafts).length)
+  if (Object.keys(record.drafts).length || record.productChanges?.length)
     throw Error(
       "Resolve or discard the previous local draft before starting another session.",
     );
@@ -360,8 +470,11 @@ async function resumeStart() {
 function committed(result) {
   record.pending = null;
   record.drafts = {};
+  record.productChanges = [];
   record.keepCurrent = false;
+  record.incomplete = false;
   $("#keep-current").checked = false;
+  $("#incomplete").checked = false;
   if (record.session) record.session.status = result.status || "COMPLETE";
   persist();
   render();
@@ -370,6 +483,7 @@ function committed(result) {
   );
 }
 async function retry() {
+  if (record.featurePending) return retryFeature();
   if (record.startPending) return resumeStart();
   if (!record.pending) return;
   const pending = record.pending;
@@ -401,6 +515,29 @@ async function retry() {
   committed(result);
   await refresh();
 }
+async function retryFeature() {
+  const pending = record.featurePending;
+  if (!pending) return;
+  let result = await rpc("operationStatus", { id: pending.id });
+  if (result.status === "ABSENT") result = await rpc("mutate", pending);
+  if (result.status === "UNKNOWN")
+    throw Error(
+      `Operation ${pending.id} is still running or uncertain. Wait and check status again. Do not recreate it; if it stays UNKNOWN, ask the owner to reconcile PwaOperations against the original records. ${result.result?.error || ""}`,
+    );
+  if (!["COMMITTED", "REJECTED"].includes(result.status))
+    throw Error("Unexpected operation status. Keep the saved request.");
+  record.featurePending = null;
+  persist();
+  $("#feature-dialog").close();
+  await refresh();
+  await features.refreshView();
+  if (result.status === "REJECTED")
+    throw Error(
+      result.result?.error ||
+        "Operation rejected. Refresh and review your input.",
+    );
+  message("Confirmed in Google Sheets. History and attribution are preserved.");
+}
 $("#connect-form").addEventListener("submit", (event) => {
   event.preventDefault();
   // Clear the DOM immediately; never pass credentials to persistence functions.
@@ -412,7 +549,7 @@ $("#connect-form").addEventListener("submit", (event) => {
       email: $("#email").value.trim().toLowerCase(),
     };
     if (
-      (record.pending || record.startPending) &&
+      hasPending() &&
       (next.endpoint !== config.endpoint || next.email !== config.email)
     )
       throw Error(
@@ -432,8 +569,11 @@ $("#connect-form").addEventListener("submit", (event) => {
     token = login.token;
     authenticated = true;
     writesEnabled = capabilities.writesEnabled === true;
+    featuresEnabled = capabilities.features === 2;
     saveRecord(localStorage, "varka-google:configuration", config);
     restore();
+    record.featuresSupported = featuresEnabled;
+    features.clear();
     render();
     if (record.startPending)
       message(
@@ -448,8 +588,10 @@ $("#retry").addEventListener("click", () => guard(retry));
 $("#submit").addEventListener("click", () =>
   guard(async () => {
     if (conflicts.length) throw Error("Review changed products first.");
-    record.pending = buildSubmission(record.session, record.drafts, {
+    record.pending = buildSubmission(checklist(), record.drafts, {
       keepCurrent: record.keepCurrent,
+      incomplete: record.incomplete,
+      productChanges: record.productChanges,
     });
     persist();
     controls();
@@ -459,6 +601,10 @@ $("#submit").addEventListener("click", () =>
 $("#keep-current").addEventListener("change", () => {
   try {
     record.keepCurrent = $("#keep-current").checked;
+    if (record.keepCurrent) {
+      record.incomplete = false;
+      $("#incomplete").checked = false;
+    }
     persist();
   } catch (error) {
     message(error.message, true);
@@ -466,12 +612,45 @@ $("#keep-current").addEventListener("change", () => {
   }
 });
 $("#search").addEventListener("input", render);
+$("#clear-draft").addEventListener("click", () =>
+  guard(() => {
+    if (hasPending()) throw Error("Resolve the pending operation first.");
+    if (
+      !confirm(
+        "Discard this device’s unsent counts and staged checklist changes? The server session and stock will not change.",
+      )
+    )
+      return;
+    record.drafts = {};
+    record.productChanges = [];
+    record.keepCurrent = false;
+    record.incomplete = false;
+    $("#keep-current").checked = false;
+    $("#incomplete").checked = false;
+    persist();
+    render();
+    message("Local count draft cleared. No server stock was changed.");
+  }),
+);
+$("#only-low").addEventListener("change", render);
+$("#incomplete").addEventListener("change", () => {
+  try {
+    record.incomplete = $("#incomplete").checked;
+    if (record.incomplete) {
+      record.keepCurrent = false;
+      $("#keep-current").checked = false;
+    }
+    persist();
+  } catch (error) {
+    message(error.message, true);
+  }
+});
 $("#lock").addEventListener("click", () =>
   guard(async () => {
-    if (record.pending || record.startPending)
+    if (hasPending())
       throw Error("Confirm the pending request before clearing this device.");
     if (
-      Object.keys(record.drafts).length &&
+      (Object.keys(record.drafts).length || record.productChanges?.length) &&
       !window.confirm("Discard saved count drafts on this device?")
     )
       return;
@@ -487,6 +666,7 @@ $("#lock").addEventListener("click", () =>
     record = initial();
     authenticated = false;
     token = null;
+    features.clear();
     render();
     message(
       "Saved inventory and drafts cleared. Sign in to open the café again.",

@@ -22,7 +22,7 @@
   </head>
   <body>
     <header>
-      <div><strong>VARKA</strong><span>Google Sheets · prototype</span></div>
+      <div><strong>VARKA</strong><span>Google Sheets · inventory</span></div>
       <button id="lock" hidden>Lock &amp; clear saved data</button>
     </header>
     <main>
@@ -88,12 +88,25 @@
           </div>
           <p id="mode"></p>
         </div>
+        <nav
+          id="feature-navigation"
+          class="panel feature-navigation"
+          aria-label="Inventory sections"
+          hidden
+        >
+          <button type="button" data-view="stock">Stock &amp; count</button>
+          <button type="button" data-view="catalog">Catalog</button>
+          <button type="button" data-view="sessions">Sessions</button>
+          <button type="button" data-view="history">History</button>
+          <button type="button" data-view="information">Information</button>
+          <button type="button" data-view="profile">Profile</button>
+        </nav>
         <section id="pending-panel" class="panel" hidden>
           <h2>Submission awaiting confirmation</h2>
           <p>
-            Your original request is saved. Retry uses the same operation ID, so
-            a lost reply does not duplicate the count. Do not submit the same
-            count from another device.
+            Your original request is saved. Retry checks the same operation ID.
+            Do not recreate this operation from another device while its outcome
+            is unknown.
           </p>
           <button id="retry" class="primary">Retry safely</button>
         </section>
@@ -105,7 +118,7 @@
           </p>
           <div id="conflicts"></div>
         </section>
-        <div class="panel">
+        <div class="panel" id="search-panel">
           <label
             >Search products<input
               id="search"
@@ -113,6 +126,10 @@
               placeholder="Name or category"
           /></label>
           <p id="count-status"></p>
+          <label class="check"
+            ><input id="only-low" type="checkbox" />Low/out only / Только
+            заканчивающиеся</label
+          >
         </div>
         <div id="products"></div>
         <section id="submit-panel" class="panel" hidden>
@@ -121,12 +138,24 @@
             unchanged (blank is never zero)</label
           >
           <button id="submit" class="primary">Synchronize counts</button>
+          <button id="clear-draft" type="button" data-feature="local">
+            Clear local count draft
+          </button>
+          <label class="check"
+            ><input id="incomplete" type="checkbox" />Close as incomplete if
+            some items are blank</label
+          >
           <p>
             Offline counts stay on this device until you reconnect, sign in, and
             synchronize. There is no background submission.
           </p>
         </section>
+        <button id="feature-reload" type="button" data-feature="read">
+          Refresh this section
+        </button>
+        <div id="feature-content"></div>
       </section>
     </main>
+    <dialog id="feature-dialog"><form id="feature-form"></form></dialog>
   </body>
 </html>
