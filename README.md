@@ -23,6 +23,8 @@ Open `http://localhost:3000`. The default database is `data/varka.sqlite`. A fre
 
 With no configured staff credentials, nonproduction mode provides a clearly labeled development owner. **Provision an owner before exposing the server or publishing it.** Production refuses to start without an enabled, provisioned owner and the configured deployment password.
 
+For the Google-backed app's phone layout and accessibility behavior, see [Mobile interface v3](docs/mobile-accessibility.md). This frontend-only update is published using the existing Pages workflow; it does not require changes to Apps Script.
+
 ## Staff access
 
 Copy `.env.example` to `.env` and set `OWNER_EMAIL` and a strong `APP_PASSWORD` of at least 12 characters. On first startup, these provision that owner; sign in using the email and password as the individual access code. Existing account codes are not reset on subsequent startups. Imported profiles do not include their old Apps Script access codes.

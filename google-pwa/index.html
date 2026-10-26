@@ -21,14 +21,29 @@
     <script type="module" src="./app.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to inventory</a>
     <header>
-      <div><strong>VARKA</strong><span>Google Sheets · inventory</span></div>
-      <button id="lock" hidden>Lock &amp; clear saved data</button>
+      <div class="brand">
+        <img src="./icons/icon.svg" alt="" width="36" height="36" />
+        <div><strong>VARKA</strong><span>Café inventory</span></div>
+      </div>
+      <span id="connection-badge" class="connection-badge">Not connected</span>
+      <button
+        id="lock"
+        aria-label="Lock &amp; clear saved data"
+        aria-describedby="lock-help"
+        hidden
+      >
+        Lock
+      </button>
     </header>
-    <main>
-      <p id="message" role="status" aria-live="polite">
+    <main id="main" tabindex="-1">
+      <p id="message" role="status" aria-live="polite" tabindex="-1">
         Connect your existing VARKA Apps Script deployment.
       </p>
+      <button id="sign-in-again" type="button" class="primary" hidden>
+        Sign in to synchronize
+      </button>
       <section class="panel" id="connect-panel">
         <h1>Connect to the café</h1>
         <p>
@@ -36,20 +51,27 @@
           access code, not your Google password.
         </p>
         <form id="connect-form">
-          <label
-            >Apps Script deployment URL<input
-              id="endpoint"
-              type="url"
-              placeholder="https://script.google.com/macros/s/…/exec"
-              required
-              autocomplete="off"
-          /></label>
+          <details id="connection-settings" open>
+            <summary>Google connection settings</summary>
+            <label
+              >Apps Script deployment URL<input
+                id="endpoint"
+                type="url"
+                placeholder="https://script.google.com/macros/s/…/exec"
+                required
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+            /></label>
+          </details>
           <label
             >Email<input
               id="email"
               type="email"
               required
               autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
           /></label>
           <label
             >Individual access code<input
@@ -61,6 +83,9 @@
           /></label>
           <button class="primary" id="connect">
             Sign in &amp; synchronize
+          </button>
+          <button id="hide-connect" type="button" class="subtle" hidden>
+            Continue with saved inventory
           </button>
         </form>
         <p>
@@ -78,19 +103,39 @@
         </details>
       </section>
       <section id="workspace" hidden>
-        <div class="panel">
-          <h1>Inventory</h1>
+        <div class="workspace-heading">
+          <p class="eyebrow">YOUR CAFÉ · YOUR STOCK</p>
+          <h1 id="view-heading" tabindex="-1">Stock &amp; count</h1>
           <p id="identity"></p>
-          <p id="sync-status"></p>
+          <details id="sync-details">
+            <summary>Connection &amp; last synchronization</summary>
+            <p id="sync-status"></p>
+            <p id="mode"></p>
+            <p id="lock-help">
+              Lock signs out and clears saved inventory on this device. Unsent
+              drafts are cleared only after your confirmation.
+            </p>
+          </details>
           <div class="actions">
             <button id="refresh">Refresh from Google Sheets</button
             ><button id="start">Start count session</button>
           </div>
-          <p id="mode"></p>
+        </div>
+        <div
+          id="stock-overview"
+          class="stock-overview"
+          aria-label="Inventory overview"
+          role="group"
+        >
+          <div>
+            <span id="metric-products">—</span><span>Active products</span>
+          </div>
+          <div><span id="metric-low">—</span><span>Low / out</span></div>
+          <div><span id="metric-due">—</span><span>Check due</span></div>
         </div>
         <nav
           id="feature-navigation"
-          class="panel feature-navigation"
+          class="feature-navigation"
           aria-label="Inventory sections"
           hidden
         >
@@ -126,18 +171,43 @@
               placeholder="Name or category"
           /></label>
           <p id="count-status"></p>
+          <p id="count-help" class="help">
+            Enter every assigned storage zone. Leave uncounted products blank;
+            enter 0 only when physically empty.
+          </p>
+          <div id="count-progress" hidden>
+            <label id="progress-label" for="count-progress-bar"
+              >Count progress</label
+            >
+            <progress
+              id="count-progress-bar"
+              value="0"
+              max="1"
+              aria-labelledby="progress-label"
+            ></progress>
+            <p id="draft-feedback" class="help" role="status"></p>
+          </div>
           <label class="check"
             ><input id="only-low" type="checkbox" />Low/out only / Только
             заканчивающиеся</label
           >
+          <p id="results-count" class="help" role="status"></p>
         </div>
         <div id="products"></div>
         <section id="submit-panel" class="panel" hidden>
+          <h2>Finish this count</h2>
+          <p class="help">
+            Choose how to handle blanks before sending. Nothing is submitted
+            automatically.
+          </p>
           <label class="check"
             ><input id="keep-current" type="checkbox" />Keep blank items
             unchanged (blank is never zero)</label
           >
-          <button id="submit" class="primary">Synchronize counts</button>
+          <div class="count-action-bar">
+            <p id="count-action-summary">Your draft stays on this device</p>
+            <button id="submit" class="primary">Synchronize counts</button>
+          </div>
           <button id="clear-draft" type="button" data-feature="local">
             Clear local count draft
           </button>
@@ -155,6 +225,7 @@
         </button>
         <div id="feature-content"></div>
       </section>
+      <p class="help app-version">VARKA · Mobile interface v3</p>
     </main>
     <dialog id="feature-dialog"><form id="feature-form"></form></dialog>
   </body>

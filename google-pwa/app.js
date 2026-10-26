@@ -1,5 +1,6 @@
 import { GoogleTransport, deploymentUrl } from "./transport.js";
 import { createFeatures } from "./features.js";
+import { focusView } from "./ui.js";
 import {
   accountKey,
   readRecord,
@@ -8,6 +9,7 @@ import {
   changedDrafts,
   normalizeSnapshot,
   effectiveSession,
+  quantity,
 } from "./model.js";
 const $ = (selector) => document.querySelector(selector);
 const initial = () => ({
@@ -30,6 +32,8 @@ let transport,
   busy = false,
   storageOkay = true;
 let featuresEnabled = false;
+let connectionOpen = false;
+let fieldId = 0;
 let conflicts = [];
 const checklist = () =>
   effectiveSession(
@@ -47,6 +51,7 @@ const features = createFeatures({
   render,
   message,
   guard,
+  focusView,
   pending: hasPending,
   busy: () => busy,
   supported: () => featuresEnabled || Boolean(record.featuresSupported),
@@ -90,8 +95,18 @@ const text = (tag, value, className) => {
   return element;
 };
 function message(value, error = false) {
-  $("#message").textContent = value;
+  if ($("#message").textContent !== value) $("#message").textContent = value;
   $("#message").classList.toggle("error", error);
+  $("#message").setAttribute("role", error ? "alert" : "status");
+  $("#message").setAttribute("aria-live", error ? "assertive" : "polite");
+  const errorBox = $("#form-error");
+  if ($("#feature-dialog").open && errorBox) {
+    errorBox.textContent = error ? value : "";
+    if (error) errorBox.focus();
+  } else if (error) {
+    $("#message").focus({ preventScroll: true });
+    $("#message").scrollIntoView({ block: "nearest" });
+  }
 }
 function persist() {
   try {
@@ -107,7 +122,35 @@ function persist() {
 function controls() {
   const pending = hasPending();
   const connected = authenticated && navigator.onLine;
+  $("#connect-panel").hidden = Boolean(
+    record.snapshot && (authenticated || !connectionOpen),
+  );
+  $("#sign-in-again").hidden =
+    authenticated || !record.snapshot || connectionOpen;
+  $("#hide-connect").hidden = !record.snapshot;
+  const badge = $("#connection-badge");
+  const status = !navigator.onLine
+    ? record.snapshot
+      ? "Offline · saved data"
+      : "Offline"
+    : authenticated
+      ? writesEnabled
+        ? "Connected"
+        : "Read only"
+      : record.snapshot
+        ? "Saved on device"
+        : "Not connected";
+  badge.textContent = status;
+  badge.dataset.state = !navigator.onLine
+    ? "offline"
+    : connected
+      ? "online"
+      : "saved";
+  $("#connect-form").setAttribute("aria-busy", String(busy));
+  $("#feature-form").setAttribute("aria-busy", String(busy));
   $("#connect").disabled = busy;
+  $("#connect").textContent =
+    busy && !authenticated ? "Connecting…" : "Sign in & synchronize";
   $("#refresh").disabled = busy || !connected;
   $("#start").disabled =
     busy ||
@@ -149,6 +192,7 @@ async function guard(action) {
     if (/SIGN_IN_REQUIRED/.test(reason)) {
       authenticated = false;
       token = null;
+      connectionOpen = true;
       message(
         "Your Google session expired. Sign in again; your local draft and pending request are preserved.",
         true,
@@ -187,6 +231,33 @@ async function refresh() {
     "Synchronized from Google Sheets. Local draft revisions were preserved.",
   );
 }
+function updateProgress() {
+  const session = checklist();
+  const counting = session?.status === "OPEN";
+  $("#count-progress").hidden = !counting;
+  $("#count-help").hidden = !counting;
+  if (!counting) return;
+  const total = session.items.length;
+  const entered = session.items.filter(
+    (spec) =>
+      spec.checked ||
+      (spec.zones?.length ? spec.zones : ["unassigned"]).every(
+        (zone) =>
+          String(
+            record.drafts[spec.id]?.locations?.[zone]?.value ?? "",
+          ).trim() !== "",
+      ),
+  ).length;
+  const label =
+    record.language === "ru"
+      ? `${entered} из ${total} товаров заполнено`
+      : `${entered} of ${total} items entered`;
+  $("#progress-label").textContent = label;
+  $("#count-progress-bar").max = Math.max(1, total);
+  $("#count-progress-bar").value = entered;
+  $("#count-action-summary").textContent =
+    `${label}. ${authenticated && navigator.onLine ? "Review blanks before sending." : "Saved locally · sign in online to send."}`;
+}
 function field(spec, zoneId, draft) {
   const row = document.createElement("div");
   row.className = "zone";
@@ -200,6 +271,10 @@ function field(spec, zoneId, draft) {
   input.inputMode = "decimal";
   input.placeholder = "Blank ≠ 0";
   input.maxLength = 30;
+  input.id = `count-field-${++fieldId}`;
+  label.htmlFor = input.id;
+  input.setAttribute("aria-describedby", `count-help ${input.id}-error`);
+  input.autocomplete = "off";
   input.dataset.product = spec.id;
   input.dataset.zone = zoneId;
   input.value = draft?.locations?.[zoneId]?.value || "";
@@ -216,6 +291,21 @@ function field(spec, zoneId, draft) {
     select.append(option);
   }
   select.value = draft?.locations?.[zoneId]?.unit || "BASE";
+  const errorBox = text("p", "", "field-error");
+  errorBox.id = `${input.id}-error`;
+  errorBox.setAttribute("role", "status");
+  function validate() {
+    try {
+      if (input.value.trim())
+        quantity(input.value, spec.unit, select.value === "SLEEVE_25");
+      input.removeAttribute("aria-invalid");
+      errorBox.textContent = "";
+    } catch (error) {
+      input.setAttribute("aria-invalid", "true");
+      errorBox.textContent = error.message;
+    }
+  }
+  input.addEventListener("blur", validate);
   const edit = () => {
     try {
       const current = record.snapshot.stock.products.find(
@@ -233,6 +323,11 @@ function field(spec, zoneId, draft) {
       entry.locations[zoneId] = { value: input.value, unit: select.value };
       entry.countedAt = new Date().toISOString();
       persist();
+      updateProgress();
+      if (input.getAttribute("aria-invalid") === "true") validate();
+      const savedMessage = "Draft saved on this device. Not submitted yet.";
+      if ($("#draft-feedback").textContent !== savedMessage)
+        $("#draft-feedback").textContent = savedMessage;
       conflicts = changedDrafts(
         { ...record.snapshot, session: checklist() },
         record.drafts,
@@ -249,7 +344,7 @@ function field(spec, zoneId, draft) {
   };
   input.addEventListener("input", edit);
   select.addEventListener("change", edit);
-  row.append(label, select);
+  row.append(label, select, errorBox);
   return row;
 }
 function flag(spec, keyName, labelText) {
@@ -370,6 +465,17 @@ function render() {
       ? "Google Sheets is the shared database. Refresh to see changes from other devices."
       : "Read-only connection. The owner must enable PWA_WRITES_ENABLED after testing.";
   const session = checklist();
+  $("#metric-products").textContent = snapshot.stock.products.length;
+  $("#metric-low").textContent = snapshot.stock.products.filter(
+    (p) =>
+      p.low ||
+      p.last === 0 ||
+      (p.last != null && p.minimum != null && p.last <= p.minimum),
+  ).length;
+  $("#metric-due").textContent = snapshot.stock.products.filter(
+    (p) => p.stale,
+  ).length;
+  updateProgress();
   const counting = session?.status === "OPEN";
   $("#count-status").textContent = session
     ? `Session ${session.id} · ${session.status}. ${counting ? "Every assigned storage zone is required for a counted product." : "Start a new session for another count."}`
@@ -389,6 +495,7 @@ function render() {
   list.replaceChildren();
   const query = $("#search").value.trim().toLowerCase();
   const products = counting ? session.items : snapshot.stock.products;
+  let shown = 0;
   for (const spec of products) {
     if (
       query &&
@@ -404,11 +511,16 @@ function render() {
           current.minimum != null &&
           current.last <= current.minimum));
     if ($("#only-low").checked && !low) continue;
+    shown++;
     const card = document.createElement("article");
     card.className = "product";
+    const productTitle = text("h2", spec.ru);
+    productTitle.lang = "ru";
+    const englishTitle = text("div", spec.en || "", "meta");
+    englishTitle.lang = "en";
     card.append(
-      text("h2", spec.ru),
-      text("div", spec.en || "", "meta"),
+      productTitle,
+      englishTitle,
       text("div", `${spec.category || ""} · ${spec.id}`, "meta"),
       text(
         "p",
@@ -420,7 +532,7 @@ function render() {
       card.append(
         text("p", "Physical check overdue / Пора пересчитать", "meta"),
       );
-    if (low) card.append(text("p", "Low / Заканчивается", "meta"));
+    if (low) card.append(text("p", "Low / Заканчивается", "badge warning"));
     if (current?.approx)
       card.append(text("p", "Estimated / Приблизительно", "meta"));
     if (current?.minimum == null)
@@ -434,14 +546,31 @@ function render() {
         ),
       );
     if (counting && !spec.checked) {
+      const fields = text("fieldset", undefined, "count-fields");
+      fields.append(text("legend", `Count / Пересчёт: ${spec.ru}`, "sr-only"));
       for (const zone of spec.zones?.length ? spec.zones : ["unassigned"])
-        card.append(field(spec, zone, record.drafts[spec.id]));
-      card.append(
+        fields.append(field(spec, zone, record.drafts[spec.id]));
+      fields.append(
         flag(spec, "approx", "Estimated / Приблизительно"),
         flag(spec, "low", "Manually mark low / Мало"),
       );
+      card.append(fields);
     }
     list.append(card);
+  }
+  const resultsMessage = `${shown} of ${products.length} products shown${query || $("#only-low").checked ? " · filtered" : ""}`;
+  if ($("#results-count").textContent !== resultsMessage)
+    $("#results-count").textContent = resultsMessage;
+  if (!shown) {
+    const empty = text("div", undefined, "panel empty-state");
+    empty.append(
+      text("h2", "No matching products"),
+      text(
+        "p",
+        "Try a different name or turn off the low-stock filter. Your draft is unchanged.",
+      ),
+    );
+    list.append(empty);
   }
   controls();
   features.render();
@@ -478,6 +607,7 @@ function committed(result) {
   if (record.session) record.session.status = result.status || "COMPLETE";
   persist();
   render();
+  focusView();
   message(
     `Confirmed in Google Sheets: ${result.saved ?? ""} counts. Refresh to see the latest inventory.`,
   );
@@ -568,6 +698,7 @@ $("#connect-form").addEventListener("submit", (event) => {
     config = next;
     token = login.token;
     authenticated = true;
+    connectionOpen = false;
     writesEnabled = capabilities.writesEnabled === true;
     featuresEnabled = capabilities.features === 2;
     saveRecord(localStorage, "varka-google:configuration", config);
@@ -580,6 +711,7 @@ $("#connect-form").addEventListener("submit", (event) => {
         "Sign-in complete. Use Retry safely to confirm your pending session start.",
       );
     else await refresh();
+    focusView();
   });
 });
 $("#refresh").addEventListener("click", () => guard(refresh));
@@ -612,6 +744,17 @@ $("#keep-current").addEventListener("change", () => {
   }
 });
 $("#search").addEventListener("input", render);
+$("#sign-in-again").addEventListener("click", () => {
+  connectionOpen = true;
+  controls();
+  $("#code").focus();
+  $("#connect-panel").scrollIntoView({ block: "start" });
+});
+$("#hide-connect").addEventListener("click", () => {
+  connectionOpen = false;
+  controls();
+  $("#sign-in-again").focus();
+});
 $("#clear-draft").addEventListener("click", () =>
   guard(() => {
     if (hasPending()) throw Error("Resolve the pending operation first.");
@@ -665,9 +808,11 @@ $("#lock").addEventListener("click", () =>
     localStorage.removeItem("varka-google:configuration");
     record = initial();
     authenticated = false;
+    connectionOpen = false;
     token = null;
     features.clear();
     render();
+    $("#email").focus();
     message(
       "Saved inventory and drafts cleared. Sign in to open the café again.",
     );
@@ -691,6 +836,7 @@ window.addEventListener("online", () => {
 });
 $("#endpoint").value = config.endpoint || "";
 $("#email").value = config.email || "";
+$("#connection-settings").open = !config.endpoint;
 if (config.endpoint && config.email) {
   restore();
   render();

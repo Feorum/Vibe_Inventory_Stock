@@ -8,13 +8,15 @@ Offline: the app shell, inventory/catalog, and previously opened history/informa
 
 ## Updating the working prototype
 
+If your full-featured Google app already works and you only need **Mobile interface v3**, rerun the Pages workflow and reload online. No Apps Script update or installer is needed. See the [mobile interface guide](mobile-accessibility.md). The steps below are for upgrading the older, count-only prototype to the full workflows.
+
 Do this on your **test copy** first:
 
 1. Back up the copied spreadsheet and current Apps Script source. Confirm `STOCK_SHEET_ID` still targets that copy.
 2. Replace **only `PwaBridge.gs`** with the current repository version. The original five files, `Inventory.html`, `PwaBridge.html`, and the existing `doGet` bridge hook stay in place.
 3. From the Apps Script editor, run **`installPwaFeatures`** as owner. It backs up the workbook before creating the `PwaOperations` journal. It does not create triggers, import counts, change products, or enable Telegram. Re-running it validates an already-installed journal without replacing its rows.
 4. **Deploy → Manage deployments → Edit → New version → Deploy**. Keep the existing `/exec` URL and access settings.
-5. On GitHub, run **Actions → Deploy Google-mode PWA** again. Reload the installed app after deployment so service-worker shell v2 can activate; sign in again. An older bridge leaves the new write actions disabled and shows an update notice.
+5. On GitHub, run **Actions → Deploy Google-mode PWA** again. Reload the installed app after deployment so the current service-worker shell can activate; sign in again. An older bridge leaves the new write actions disabled and shows an update notice.
 6. With `PWA_WRITES_ENABLED=true` on the copy, test each screen. Disable reports in the owner's settings if you do not want test submissions to send real notifications. No credentials should be pasted into GitHub or chat.
 
 Fresh installations need step 3 after adding the bridge below, before using the new workflows.

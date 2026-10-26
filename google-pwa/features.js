@@ -1,4 +1,5 @@
 import { quantity } from "./model.js";
+import { navigationLabel } from "./ui.js";
 
 // Google Sheets workflows. All authoritative validation remains in Apps Script.
 export function createFeatures(host) {
@@ -13,6 +14,42 @@ export function createFeatures(host) {
   let view = "stock";
   const root = $("#feature-content");
   const dialog = $("#feature-dialog");
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const fields = [
+      ...dialog.querySelectorAll("input,select,textarea,button,[tabindex]"),
+    ].filter(
+      (field) =>
+        !field.disabled && field.tabIndex >= 0 && field.getClientRects().length,
+    );
+    const first = fields[0],
+      last = fields.at(-1),
+      active = document.activeElement;
+    if (!first) return;
+    // Native dialogs can send reverse-Tab from the first field to browser chrome.
+    // Keep both directions predictable, including after an error-summary focus.
+    if (
+      event.shiftKey &&
+      (active === first || active === dialog || active.tabIndex < 0)
+    ) {
+      event.preventDefault();
+      last.focus();
+    } else if (
+      !event.shiftKey &&
+      (active === last || active === dialog || active.tabIndex < 0)
+    ) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  let formOpener;
+  let labelId = 0;
+  dialog.addEventListener("close", () => {
+    if (formOpener?.isConnected && !formOpener.disabled)
+      formOpener.focus({ preventScroll: true });
+    else if (!$("#workspace").hidden)
+      $("#view-heading").focus({ preventScroll: true });
+  });
   function action(label, handler, { write = true, local = false } = {}) {
     const button = node("button", label);
     button.type = "button";
@@ -26,11 +63,40 @@ export function createFeatures(host) {
     return card;
   }
   function showForm(title, fields, onSubmit, { local = false } = {}) {
+    formOpener = document.activeElement;
     const form = $("#feature-form");
-    form.replaceChildren(node("h2", title));
+    form.lang = host.record().language || "en";
+    const heading = node("div", undefined, "form-heading");
+    const titleNode = node("h2", title);
+    titleNode.id = "form-title";
+    const help = node(
+      "p",
+      tr(
+        "Fields marked * are required. Changes are saved only when you choose Save.",
+        "Поля со * обязательны. Изменения сохраняются только после нажатия «Сохранить».",
+      ),
+      "help",
+    );
+    help.id = "form-instructions";
+    heading.append(titleNode, help);
+    const error = node("p", "", "form-error");
+    error.id = "form-error";
+    error.tabIndex = -1;
+    error.setAttribute("role", "alert");
+    dialog.setAttribute("aria-labelledby", titleNode.id);
+    dialog.setAttribute("aria-describedby", help.id);
+    form.replaceChildren(heading, error);
     const getters = {};
     for (const field of fields) {
-      const label = node("label", field.label);
+      const label = node("label");
+      const caption = node("span", field.label);
+      caption.id = `form-label-${++labelId}`;
+      label.append(caption);
+      if (field.required) {
+        const marker = node("span", "*", "required-marker");
+        marker.setAttribute("aria-hidden", "true");
+        label.append(marker);
+      }
       const input = document.createElement(
         field.options
           ? "select"
@@ -46,6 +112,7 @@ export function createFeatures(host) {
         }
       } else if (field.type !== "textarea") input.type = field.type || "text";
       input.name = field.name;
+      input.setAttribute("aria-labelledby", caption.id);
       input.required = Boolean(field.required);
       if (field.type === "checkbox") {
         input.checked = Boolean(field.value);
@@ -66,7 +133,9 @@ export function createFeatures(host) {
     const cancel = node("button", tr("Cancel", "Отмена"));
     cancel.type = "button";
     cancel.addEventListener("click", () => dialog.close());
-    form.append(save, cancel);
+    const footer = node("div", undefined, "form-actions");
+    footer.append(cancel, save);
+    form.append(footer);
     form.onsubmit = (event) => {
       event.preventDefault();
       host.guard(async () => {
@@ -79,6 +148,16 @@ export function createFeatures(host) {
     };
     dialog.showModal();
     controls();
+    // Opening runs inside host.guard, which briefly disables controls. Focus
+    // after that guard finishes rather than leaving focus on a disabled input.
+    setTimeout(() => {
+      if (dialog.open)
+        form
+          .querySelector(
+            "input:not(:disabled),select:not(:disabled),textarea:not(:disabled)",
+          )
+          ?.focus();
+    }, 0);
   }
   const zones = () => host.record().snapshot?.zones || [];
   const zoneFields = (selected) =>
@@ -300,6 +379,19 @@ export function createFeatures(host) {
       );
       return;
     }
+    if (!(history.entries || []).length) {
+      const empty = panel(tr("No stock movements yet", "Движений пока нет"));
+      empty.append(
+        node(
+          "p",
+          tr(
+            "Recorded counts, deliveries and waste will appear here after synchronization.",
+            "После синхронизации здесь появятся пересчёты, приход и списания.",
+          ),
+        ),
+      );
+      card.append(empty);
+    }
     for (const entry of history.entries || []) {
       const row = panel(`${entry.ru} · ${entry.action}`);
       row.append(
@@ -470,6 +562,12 @@ export function createFeatures(host) {
     $("#feature-navigation").hidden = !snapshot;
     root.replaceChildren();
     const stock = view === "stock";
+    root.lang = record.language || "en";
+    document.body.dataset.counting = String(
+      stock && record.session?.status === "OPEN",
+    );
+    $("#stock-overview").hidden = !stock;
+    $("#feature-reload").hidden = stock;
     for (const id of [
       "products",
       "submit-panel",
@@ -483,16 +581,30 @@ export function createFeatures(host) {
     }
     $("#start").hidden = !stock;
     if (!snapshot) return;
+    const titles = {
+      stock: tr("Stock & count", "Остатки и пересчёт"),
+      catalog: tr("Catalog", "Каталог"),
+      sessions: tr("Sessions", "Сессии"),
+      history: tr("History", "История"),
+      information: tr("Information", "Информация"),
+      profile: tr("Profile", "Профиль"),
+    };
+    const labels = {
+      ...titles,
+      stock: tr("Stock", "Остатки"),
+      sessions: tr("Counts", "Сессии"),
+      information: tr("Team", "Команда"),
+    };
+    $("#view-heading").textContent = titles[view];
+    $("#view-heading").lang = record.language || "en";
+    document.title = `${titles[view]} · VARKA`;
     for (const button of $("#feature-navigation").querySelectorAll("button")) {
-      button.setAttribute("aria-pressed", String(button.dataset.view === view));
-      button.textContent = {
-        stock: tr("Stock & count", "Остатки и пересчёт"),
-        catalog: tr("Catalog", "Каталог"),
-        sessions: tr("Sessions", "Сессии"),
-        history: tr("History", "История"),
-        information: tr("Information", "Информация"),
-        profile: tr("Profile", "Профиль"),
-      }[button.dataset.view];
+      navigationLabel(
+        button,
+        labels[button.dataset.view],
+        button.dataset.view === view,
+        record.language || "en",
+      );
     }
     if (!host.supported())
       root.append(
@@ -695,6 +807,17 @@ export function createFeatures(host) {
       }
     }
     if (view === "sessions") {
+      if (!(snapshot.recent || []).length)
+        root.append(
+          node(
+            "p",
+            tr(
+              "No recent sessions. Start a count from Stock when you are online.",
+              "Нет недавних сессий. Начните пересчёт в разделе «Остатки», когда будете онлайн.",
+            ),
+            "panel empty-state",
+          ),
+        );
       for (const session of snapshot.recent || []) {
         const card = panel(
           `${session.status} · ${session.authorName || session.by}`,
@@ -741,6 +864,17 @@ export function createFeatures(host) {
               "Open online to save team information on this device.",
               "Откройте онлайн для сохранения информации на устройстве.",
             ),
+          ),
+        );
+      if (info && !info.notes?.length && !info.cards?.length)
+        root.append(
+          node(
+            "p",
+            tr(
+              "No reminders or yellow cards yet. Add the first one for your team.",
+              "Напоминаний и карточек пока нет. Добавьте первую запись для команды.",
+            ),
+            "panel empty-state",
           ),
         );
       for (const note of info?.notes || []) {
@@ -871,6 +1005,9 @@ export function createFeatures(host) {
   function controls() {
     const pending = host.pending(),
       blocked = host.busy() || pending;
+    $("#feature-navigation")
+      .querySelectorAll("button")
+      .forEach((button) => (button.disabled = host.busy()));
     document.querySelectorAll("[data-feature]").forEach((button) => {
       const type = button.dataset.feature;
       button.disabled =
@@ -889,6 +1026,7 @@ export function createFeatures(host) {
         view = button.dataset.view;
         host.render();
         await loadView(view);
+        host.focusView();
       }),
     );
   $("#feature-reload").addEventListener("click", () =>

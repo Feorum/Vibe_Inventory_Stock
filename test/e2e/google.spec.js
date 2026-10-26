@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import AxeBuilder from "@axe-core/playwright";
 
 const endpoint = "https://script.google.com/macros/s/TEST-DEPLOYMENT/exec";
 const inner = "https://n-test-script.googleusercontent.com";
@@ -111,8 +112,13 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
     else if (request.token !== "memory-only-token") {
       await route.fulfill({ json: { ok: false, error: "SIGN_IN_REQUIRED" } });
       return;
-    } else if (request.method === "load") result = load();
-    else if (request.method === "start") {
+    } else if (request.method === "load") {
+      if (backend.failLoad) {
+        await route.fulfill({ json: { ok: false, error: "V4_NOT_INSTALLED" } });
+        return;
+      }
+      result = load();
+    } else if (request.method === "start") {
       backend.session ||= {
         id: request.body.id,
         by: email,
@@ -242,6 +248,10 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
   return backend;
 }
 async function login(page) {
+  if (await page.locator("#sign-in-again").isVisible())
+    await page.locator("#sign-in-again").click();
+  if (!(await page.locator("#endpoint").isVisible()))
+    await page.locator("#connection-settings > summary").click();
   await page.locator("#endpoint").fill(endpoint);
   await page.locator("#email").fill(email);
   await page.locator("#code").fill(code);
@@ -250,12 +260,215 @@ async function login(page) {
     "Synchronized from Google Sheets",
   );
 }
+
+test("Mobile interface has accessible screens, named forms and keyboard focus recovery", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await mockGoogle(page, { owner: true });
+  await page.goto(path);
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("link", { name: "Skip to inventory" }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#main")).toBeFocused();
+  const audit = async () => {
+    const report = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(
+      report.violations.map((v) => ({
+        id: v.id,
+        targets: v.nodes.map((n) => n.target),
+      })),
+    ).toEqual([]);
+  };
+  await audit();
+  await login(page);
+  await expect(page.locator("#connect-panel")).toBeHidden();
+  await expect(page.locator("#view-heading")).toBeFocused();
+  await expect(page.locator('[data-view="stock"]')).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await audit();
+  await page.getByRole("button", { name: "Record waste", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveAccessibleName("Waste · Молоко");
+  await expect(page.getByLabel("Quantity", { exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    page
+      .locator("#feature-form")
+      .getByRole("button", { name: "Save", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Quantity", { exact: true })).toBeFocused();
+  await audit();
+  await page.getByLabel("Quantity", { exact: true }).fill("-1");
+  await page.getByLabel("Reason / note").fill("Test validation only");
+  await page
+    .locator("#feature-form")
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+  await expect(page.locator("#form-error")).toBeFocused();
+  await expect(page.locator("#form-error")).toContainText("nonnegative");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Record waste", exact: true }),
+  ).toBeFocused();
+  await page.locator('[data-view="catalog"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#view-heading")).toBeFocused();
+  await expect(page.locator("#view-heading")).toHaveText("Catalog");
+  await page.getByRole("button", { name: "Add product", exact: true }).click();
+  await audit();
+  await page.keyboard.press("Escape");
+  for (const view of ["sessions", "history", "information", "profile"]) {
+    await page.locator(`[data-view="${view}"]`).click();
+    await audit();
+  }
+});
+
+test("Mobile counting shows progress, field errors and a reachable safe submit action", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await mockGoogle(page);
+  await page.goto(path);
+  await login(page);
+  await page.locator("#start").click();
+  await expect(page.locator("#message")).toContainText("Session opened");
+  await expect(page.locator("#progress-label")).toHaveText(
+    "0 of 1 items entered",
+  );
+  const fridge = page.locator('input[data-zone="fridge"]');
+  await fridge.fill("invalid");
+  await fridge.blur();
+  await expect(fridge).toHaveAttribute("aria-invalid", "true");
+  const error = await fridge.getAttribute("aria-describedby");
+  await expect(page.locator(`#${error.split(" ")[1]}`)).toContainText(
+    "quantity",
+  );
+  await fridge.fill("1.25");
+  await page.locator('input[data-zone="shelf"]').fill("0");
+  await expect(fridge).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator("#progress-label")).toHaveText(
+    "1 of 1 items entered",
+  );
+  await expect(
+    page.getByRole("group", { name: "Count / Пересчёт: Молоко" }),
+  ).toBeVisible();
+  await page.locator("#submit-panel").scrollIntoViewIfNeeded();
+  const submit = await page.locator("#submit").boundingBox();
+  const nav = await page.locator("#feature-navigation").boundingBox();
+  expect(submit.y + submit.height).toBeLessThanOrEqual(
+    nav.y > submit.y ? nav.y : await page.evaluate(() => innerHeight),
+  );
+  const report = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(report.violations.map((v) => v.id)).toEqual([]);
+});
+
+test("Mobile layout reflows at 320 pixels and keeps navigation touch targets usable", async ({
+  page,
+}) => {
+  await mockGoogle(page);
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(path);
+  await login(page);
+  for (const view of [
+    "stock",
+    "catalog",
+    "sessions",
+    "history",
+    "information",
+    "profile",
+  ]) {
+    await page.locator(`[data-view="${view}"]`).click();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  const sizes = await page
+    .locator("#feature-navigation button")
+    .evaluateAll((nodes) =>
+      nodes.map((n) => ({
+        width: n.getBoundingClientRect().width,
+        height: n.getBoundingClientRect().height,
+      })),
+    );
+  for (const size of sizes) {
+    expect(size.width).toBeGreaterThanOrEqual(44);
+    expect(size.height).toBeGreaterThanOrEqual(44);
+  }
+  await page.locator('[data-view="information"]').click();
+  await page.getByRole("button", { name: "Add reminder", exact: true }).click();
+  expect(
+    await page
+      .locator("#feature-dialog")
+      .evaluate((n) => n.scrollWidth <= n.clientWidth),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-view="stock"]').click();
+  await page.screenshot({
+    path: test.info().outputPath("mobile-stock.png"),
+    fullPage: true,
+  });
+  await page.locator("#search").fill("no-such-product");
+  await expect(
+    page.getByRole("heading", { name: "No matching products" }),
+  ).toBeVisible();
+  await expect(page.locator("#results-count")).toHaveText(
+    "0 of 1 products shown · filtered",
+  );
+  await page.locator("#search").fill("");
+  await page.setViewportSize({ width: 640, height: 960 });
+  await page.evaluate(() => (document.documentElement.style.zoom = "2"));
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Record delivery", exact: true })
+    .click();
+  expect(
+    await page
+      .locator("#feature-dialog")
+      .evaluate((n) => n.scrollWidth <= n.clientWidth),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+});
 async function startCount(page) {
   await page.locator("#start").click();
   await expect(page.locator("#message")).toContainText("Session opened");
   await page.locator('input[data-zone="fridge"]').fill("1.25");
   await page.locator('input[data-zone="shelf"]').fill("0");
 }
+test("A failed first synchronization leaves an accessible way to sign in and retry", async ({
+  page,
+}) => {
+  const backend = await mockGoogle(page);
+  backend.failLoad = true;
+  await page.goto(path);
+  await page.locator("#endpoint").fill(endpoint);
+  await page.locator("#email").fill(email);
+  await page.locator("#code").fill(code);
+  await page.locator("#connect").click();
+  await expect(page.locator("#message")).toContainText("V4_NOT_INSTALLED");
+  await expect(page.locator("#message")).toBeFocused();
+  await expect(page.locator("#connect-panel")).toBeVisible();
+  await expect(page.locator("#connect")).toBeEnabled();
+  backend.failLoad = false;
+  await login(page);
+  await expect(page.locator("#workspace")).toBeVisible();
+});
 test("Google mode reads live products in read-only mode without persisting credentials", async ({
   page,
 }) => {
@@ -483,6 +696,7 @@ test("Google mode requires explicit review of a second-device change before subm
     .click();
   await expect(page.locator("#conflicts-panel")).toBeHidden();
   await page.locator("#submit").click();
+  await expect(page.locator("#refresh")).toBeEnabled({ timeout: 15000 });
   await expect(page.locator("#products")).toContainText("1.25 l");
   expect(backend.submissions).toBe(1);
 });

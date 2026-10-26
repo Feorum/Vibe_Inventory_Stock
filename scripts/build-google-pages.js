@@ -14,6 +14,7 @@ export async function buildGooglePages() {
     "model.js",
     "transport.js",
     "features.js",
+    "ui.js",
     "manifest.webmanifest",
     "sw.js",
   ];
