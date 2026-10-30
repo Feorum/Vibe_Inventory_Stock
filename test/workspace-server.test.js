@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 
 const source = await readFile(
@@ -158,7 +158,7 @@ function database({ count = 2, baseline = {} } = {}) {
     Map,
     Set,
     Date,
-    BigInt,
+    BigInt: undefined, // Apps Script compatibility: no constructor dependency.
     book_: () => book,
     prop_: () => ({
       getProperty: (key) => properties.get(key) || null,
@@ -837,4 +837,84 @@ test("old floating movement artifacts in uncounted report data never block fresh
       .join("\n")
       .includes("Previously recorded: 0.3 l"),
   );
+});
+
+test("Apps Script files avoid parser-incompatible integer literals and constructor dependencies", async () => {
+  const directory = new URL("../apps-script/", import.meta.url);
+  for (const name of (await readdir(directory)).filter((file) =>
+    file.endsWith(".gs"),
+  )) {
+    const code = await readFile(new URL(name, directory), "utf8");
+    assert.doesNotMatch(
+      code,
+      /\b(?:0[xob][\da-f]+|\d+)n\b|\bBigInt\s*\(/i,
+      name,
+    );
+    assert.doesNotThrow(() => new vm.Script(code, { filename: name }));
+  }
+});
+
+test("Apps Script decimal text arithmetic is exact beyond the safe integer boundary", () => {
+  const db = database();
+  assert.equal(db.context.BigInt, undefined);
+  const cases = [
+    ["0", "0"],
+    ["99999999", "1"],
+    ["9007199254740991", "1"],
+    ["9007199254740992", "9"],
+    ["99999999999999999", "1"],
+    ["100000000000000000", "1"],
+  ];
+  let seed = 731;
+  const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0);
+  for (let i = 0; i < 200; i++) {
+    const a =
+      (BigInt(next()) * 100000000n + BigInt(next())) % 100000000000000001n;
+    const b =
+      (BigInt(next()) * 100000000n + BigInt(next())) % 100000000000000001n;
+    cases.push([String(a), String(b)]);
+  }
+  for (const [left, right] of cases)
+    assert.equal(
+      db.context.workspaceAddScaled_(left, right),
+      String(BigInt(left) + BigInt(right)),
+    );
+  for (const value of ["0", "0.00000001", "1.25", "1000000000"])
+    assert.equal(db.context.workspaceQuantity_(value, "l"), Number(value));
+  for (const value of [
+    "1000000000.00000001",
+    "999999999.00000001",
+    "-1",
+    "0.000000001",
+  ])
+    assert.throws(
+      () => db.context.workspaceQuantity_(value, "l"),
+      /INVALID_QUANTITY/,
+    );
+  assert.throws(
+    () => db.context.workspaceQuantity_("0.00000001", "pcs"),
+    /INVALID_QUANTITY/,
+  );
+});
+
+test("zone sums carry exactly without arbitrary precision runtime support", () => {
+  const db = database(),
+    p = db.load().products[0];
+  const input = db.item(p, "0.99999999");
+  input.locations[1].value = "0.00000001";
+  assert.equal(
+    db.call("workspaceCount", db.countRequest([input])).accepted[0].last,
+    1,
+  );
+  const maximum = db.item(db.load().products[0], "999999999");
+  maximum.locations[1].value = "1";
+  assert.equal(
+    db.call("workspaceCount", db.countRequest([maximum])).accepted[0].last,
+    1000000000,
+  );
+  const overflow = db.item(db.load().products[0], "1000000000");
+  overflow.locations[1].value = "0.00000001";
+  const result = db.call("workspaceCount", db.countRequest([overflow]));
+  assert.equal(result.failed[0].error, "INVALID_QUANTITY");
+  assert.equal(db.load().products[0].last, 1000000000);
 });

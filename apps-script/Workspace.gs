@@ -372,6 +372,44 @@ function workspacePrior_(id, email, kind, body) {
     throw Error("REQUEST_ID_REUSED");
   return previous;
 }
+// Apps Script's source parser rejects arbitrary-precision integer literals.
+// Keep scaled quantities as decimal text: 1e9 at eight decimal places exceeds
+// Number.MAX_SAFE_INTEGER. Convert only after exact summation and validation.
+function workspaceScaledText_(text) {
+  const parts = text.split(".");
+  return (parts[0] + (parts[1] || "").padEnd(8, "0")).replace(/^0+(?=\d)/, "");
+}
+function workspaceAddScaled_(left, right) {
+  let result = "",
+    carry = 0,
+    i = left.length - 1,
+    j = right.length - 1;
+  while (i >= 0 || j >= 0 || carry) {
+    const sum =
+      Number(i >= 0 ? left[i--] : 0) + Number(j >= 0 ? right[j--] : 0) + carry;
+    result = String(sum % 10) + result;
+    carry = Math.floor(sum / 10);
+  }
+  return result || "0";
+}
+function workspaceScaledNumber_(scaled) {
+  const maximum = "100000000000000000";
+  if (
+    scaled.length > maximum.length ||
+    (scaled.length === maximum.length && scaled > maximum)
+  )
+    throw Error("INVALID_QUANTITY");
+  const padded = scaled.padStart(9, "0");
+  const quantity = Number(padded.slice(0, -8) + "." + padded.slice(-8));
+  // The native Sheets ledger uses numbers. Reject any quantity that cannot
+  // retain its exact eight-decimal value instead of silently rounding it.
+  if (
+    !Number.isFinite(quantity) ||
+    workspaceScaledText_(quantity.toFixed(8)) !== scaled
+  )
+    throw Error("INVALID_QUANTITY");
+  return quantity;
+}
 function workspaceQuantity_(value, unit) {
   if (!["l", "kg", "pcs", "pack", "roll"].includes(unit))
     throw Error("INVALID_UNIT");
@@ -379,17 +417,9 @@ function workspaceQuantity_(value, unit) {
     throw Error("INVALID_QUANTITY");
   const text = String(value).trim().replace(",", ".");
   if (!/^\d+(?:\.\d{1,8})?$/.test(text)) throw Error("INVALID_QUANTITY");
-  const [whole, decimal = ""] = text.split("."),
-    scaled = BigInt(whole) * 100000000n + BigInt(decimal.padEnd(8, "0")),
-    quantity = Number(text);
-  if (
-    !Number.isFinite(quantity) ||
-    scaled > 1000000000n * 100000000n ||
-    BigInt(Math.round(quantity * 1e8)) !== scaled ||
-    (unit === "pcs" && scaled % 100000000n !== 0n)
-  )
-    throw Error("INVALID_QUANTITY");
-  return quantity;
+  const decimal = text.split(".")[1] || "";
+  if (unit === "pcs" && /[1-9]/.test(decimal)) throw Error("INVALID_QUANTITY");
+  return workspaceScaledNumber_(workspaceScaledText_(text));
 }
 function workspaceCountTotal_(item, product) {
   const expected = product.zones.length ? product.zones : ["unassigned"];
@@ -399,7 +429,7 @@ function workspaceCountTotal_(item, product) {
   )
     throw Error("INVALID_ZONES");
   const found = new Set();
-  let scaled = 0n;
+  let scaled = "0";
   for (const location of item.locations) {
     if (
       !location ||
@@ -410,15 +440,10 @@ function workspaceCountTotal_(item, product) {
       throw Error("INVALID_ZONES");
     found.add(location.zoneId);
     workspaceQuantity_(location.value, product.unit);
-    const split = String(location.value).trim().replace(",", ".").split(".");
-    scaled +=
-      BigInt(split[0]) * 100000000n + BigInt((split[1] || "").padEnd(8, "0"));
+    const text = String(location.value).trim().replace(",", ".");
+    scaled = workspaceAddScaled_(scaled, workspaceScaledText_(text));
   }
-  if (scaled > 1000000000n * 100000000n) throw Error("INVALID_QUANTITY");
-  const total = Number(scaled) / 1e8;
-  if (BigInt(Math.round(total * 1e8)) !== scaled)
-    throw Error("INVALID_QUANTITY");
-  return total;
+  return workspaceScaledNumber_(scaled);
 }
 function workspaceReportProducts_(notification, current, storedRows) {
   if (notification.products === undefined) return current;

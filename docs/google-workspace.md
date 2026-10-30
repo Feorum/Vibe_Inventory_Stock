@@ -2,6 +2,14 @@
 
 The main Google PWA now has **Stock, Catalog, Team, and Profile**. Counting is always available; no session must be started. This implementation targets the currently used Google-backed application, not the separate Node/SQLite application. It adds no hosting service or third-party proxy.
 
+## Fixing `ParseError: Unexpected token ILLEGAL` at line 383
+
+The first Workspace release contained an integer-literal syntax that the Apps Script parser rejects. Node-based tests accepted that syntax, so they did not reveal the platform-specific save failure. The corrected `Workspace.gs` uses exact scaled decimal-text arithmetic instead, without relying on an arbitrary-precision integer runtime. Browser and Node arithmetic are unchanged.
+
+Replace the **entire contents of the existing Workspace script file** with the current repository `apps-script/Workspace.gs`. If your editor calls the file `Workspace.gs.gs`, that is still the file to replace: do not leave the old source in place and add a second copy. Save the project, finish `installWorkspace` if the error prevented initial setup, and deploy **New version** of the existing web deployment. An already-completed migration does not need to be repeated. This correction changes no spreadsheet schema or existing data and needs no Pages frontend update.
+
+Regression tests now reject the incompatible syntax across every repository `.gs` file, execute the workspace backend with the integer constructor unavailable, and verify exact decimal sums, zero, whole pieces, the maximum, overflow, and large values beyond the safe-integer boundary. These checks do not substitute for saving the source in your actual Apps Script editor.
+
 ## Upgrade safely
 
 Use a **test copy of the workbook and its existing Apps Script project first**. Nobody running these repository tests has access to your live Google deployment, private credentials, or Telegram chat.
