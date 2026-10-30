@@ -2,6 +2,8 @@
 
 The Google-backed interface is redesigned for phones; inventory rules, Google RPCs, account permissions, local draft keys and pending-operation recovery are unchanged. This update requires only the **Deploy Google-mode PWA** GitHub Actions workflow, not an Apps Script installer or a new Google deployment. After a successful deployment, reopen online and reload after the service worker activates. The footer identifies **Mobile interface v3**. Do not clear site storage or uninstall to get an update: that can erase unsent drafts.
 
+The later **v3.1 zone-recovery fix** adds a server-coordinated replacement of blocked count checklists and therefore also needs the updated `PwaBridge.gs` deployed as a new version. It does not need an installer. See [the count recovery steps](google-mode.md#fixing-a-pending-zones_changed-count-interface-v31) before acting on a pending `ZONES_CHANGED` error. The old count is checked under the legacy lock, originals are archived locally, and changed/old inputs require review; the zone validator is not disabled.
+
 ## Everyday use
 
 - **Sign in once per connected visit.** The connection form collapses after sign-in. The deployment URL remains saved and can be expanded under Google connection settings. Reopened saved inventory offers a short Sign in to synchronize action instead of placing a large login form above stock. Credentials are still memory-only.

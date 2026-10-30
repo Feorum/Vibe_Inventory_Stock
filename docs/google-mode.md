@@ -8,7 +8,25 @@ Offline: the app shell, inventory/catalog, and previously opened history/informa
 
 ## Updating the working prototype
 
-If your full-featured Google app already works and you only need **Mobile interface v3**, rerun the Pages workflow and reload online. No Apps Script update or installer is needed. See the [mobile interface guide](mobile-accessibility.md). The steps below are for upgrading the older, count-only prototype to the full workflows.
+### Fixing a pending `ZONES_CHANGED` count (interface v3.1)
+
+Do not clear site storage, reinstall, change zones back merely to bypass validation, or recreate the count on another device. The old browser request and original quantities must remain available.
+
+1. Replace **only `PwaBridge.gs`** in the same Apps Script project with the current repository version. Keep the original five files, `PwaBridge.html`, `doGet`, spreadsheet ID and individual access codes unchanged. This patch needs **no installer or new Script Property**.
+2. **Deploy → Manage deployments → Edit → New version → Deploy**. Keep the same `/exec` deployment URL. Merely saving the file does not update that URL.
+3. Run GitHub **Actions → Deploy Google-mode PWA** on `main`. Reopen online and reload after service-worker activation; the footer must say **Mobile interface v3.1**. Sign in again to load the new recovery capability. Unsent counts keep their existing localStorage keys.
+4. In the pending panel, optionally choose **Download saved count backup** and keep that private file on a trusted device. Then choose **Recover count with current zones** and read the confirmation.
+5. The server first checks the exact old request under the legacy script lock. A committed count is confirmed without another write. Otherwise an owned OPEN checklist is closed as REPLACED and a fresh checklist is started. Closing the old checklist prevents its delayed submission from committing afterward. **No stock events or notifications are created by this recovery.**
+6. In the recovered draft, review the listed products. Original values, including removed zones, remain in a device-local archive. Matching zones retain their inputs; added zones remain blank. Different units/packaging do not inherit old numeric inputs. Physically recheck every current zone of each flagged product (including zero where empty), then choose **I rechecked every current zone — use these values**. Older count timestamps also require a fresh physical check. Inactive products can explicitly be kept in the backup only. Staged catalog changes are archived rather than silently reapplied; review/restage them in Catalog if still wanted.
+7. Submit only after the review is complete. The normal stock/catalog revision checks still apply. Original backups remain downloadable from Profile even after successful submission.
+
+If recovery itself loses a reply or is interrupted, **Retry safely** resumes the same recovery ID. The append-only CLOSE/START journal records are repaired idempotently; it does not open duplicate sessions or discard drafts. If the old count has an unconfirmed/corrupt envelope, or the session was closed elsewhere, recovery stops for owner inspection instead of assuming rollback. If device storage is full, the client keeps its original pending data until the recovered candidate can be saved; free space without deleting app data, then retry. Recovery archives are not encrypted and remain scoped to that device/account/deployment. Download them before clearing browser data. Recovery does not import backups automatically or convert an old physical count into a fresh one without review.
+
+The shared-lock guarantee applies to writers in this same Apps Script project. Separate projects writing to the same workbook do not share a script lock; stop such parallel writers before recovery. Manual spreadsheet edits can also bypass the application's validation and audit rules.
+
+### Earlier prototype and interface updates
+
+If your full-featured Google app already works and you only need the **v3 visual redesign**, rerun the Pages workflow and reload online. The **v3.1 count-recovery fix does require the updated bridge deployment above**, but no installer. See the [mobile interface guide](mobile-accessibility.md). The steps below are for upgrading the older, count-only prototype to the full workflows.
 
 Do this on your **test copy** first:
 

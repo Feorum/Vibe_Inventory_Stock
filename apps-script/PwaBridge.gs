@@ -38,7 +38,12 @@ function pwaDispatch(request) {
     let result;
     switch (request.method) {
       case "ping":
-        result = { protocol: 1, features: 2, writesEnabled: writes };
+        result = {
+          protocol: 1,
+          features: 2,
+          countRecovery: 1,
+          writesEnabled: writes,
+        };
         break;
       case "login":
         result = webLogin(body.email, body.code);
@@ -63,6 +68,10 @@ function pwaDispatch(request) {
         break;
       case "status":
         result = webV9SubmissionStatus(request.token, { id: body.id });
+        break;
+      case "recoverCount":
+        if (!writes) throw Error("PWA_READ_ONLY");
+        result = pwaRecoverCount_(request.token, body);
         break;
       case "information":
         result = webV6Information(request.token);
@@ -94,6 +103,146 @@ function pwaDispatch(request) {
       error: String(error.message || "GOOGLE_REQUEST_FAILED").slice(0, 1000),
     };
   }
+}
+
+// This is an explicit cancellation/replacement of an OWN open checklist, not
+// a bypass of ZONES_CHANGED. The shared legacy lock prevents the old request
+// from committing after the CLOSE record. No stock or notification is written.
+function pwaRecoverCount_(token, request) {
+  const email = webAuth_(token);
+  const id = v3Id_(request.id),
+    successorId = v3Id_(request.successorId);
+  const pending = request.pending;
+  if (!pending || !Array.isArray(pending.items))
+    throw Error("INVALID_RECOVERY");
+  v3Id_(pending.id);
+  v3Id_(pending.sessionId);
+  if (successorId === pending.sessionId) throw Error("INVALID_RECOVERY");
+  const fingerprint = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(request),
+    Utilities.Charset.UTF_8,
+  )
+    .map((n) => ("0" + ((n + 256) % 256).toString(16)).slice(-2))
+    .join("");
+  return v3Lock_(() => {
+    const raw = v5RawEvents_(),
+      row = raw.find((r) => r[0] === "V5BATCH:" + pending.id);
+    if (row) {
+      const batch = v5Decode_(row);
+      if (!batch) return { status: "UNCONFIRMED" };
+      if (
+        batch.by !== email ||
+        batch.sessionId !== pending.sessionId ||
+        batch.requestHash !== webHash_(JSON.stringify(pending))
+      )
+        throw Error("REQUEST_ID_REUSED");
+      return {
+        status: "COMMITTED",
+        result: {
+          ok: true,
+          sessionId: batch.sessionId,
+          submittedAt: batch.submittedAt,
+          saved: batch.events.length,
+          status: batch.status,
+          unchanged: (batch.missing || []).length,
+        },
+      };
+    }
+    const sheet = book_().getSheetByName("InventorySessions");
+    const journal = sheet.getDataRange().getValues().slice(1);
+    const closeId = "PWA-RECOVERY:" + id;
+    const close = journal.find((r) => r[0] === closeId);
+    const start = journal.find(
+      (r) => r[0] === successorId || r[4] === successorId,
+    );
+    if (
+      close &&
+      (close[2] !== email ||
+        close[3] !== "CLOSE" ||
+        close[4] !== pending.sessionId ||
+        close[5] !== fingerprint)
+    )
+      throw Error("REQUEST_ID_REUSED");
+    if (
+      start &&
+      (!close ||
+        start[0] !== successorId ||
+        start[2] !== email ||
+        start[3] !== "START" ||
+        JSON.parse(start[6] || "{}").recoveryId !== id)
+    )
+      throw Error("REQUEST_ID_REUSED");
+    const session = v4Session_(pending.sessionId);
+    if (session.by !== email) throw Error("OWN_SESSION_ONLY");
+    if (!close && session.status !== "OPEN")
+      return { status: "SESSION_CHANGED" };
+    if (close && session.status !== "REPLACED")
+      return { status: "SESSION_CHANGED" };
+    if (start)
+      return {
+        status: "RECOVERED",
+        sessionId: successorId,
+        recoveredFrom: pending.sessionId,
+      };
+    // Construct/validate before closing anything. Retry after an interrupted
+    // CLOSE repairs only the missing START; it never duplicates either row.
+    const events = rows_("Events"),
+      products = rows_("Products"),
+      state = totalState_(events, baselines_());
+    const checklist = products
+      .filter((p) => p[6] === "YES")
+      .map((p) => ({
+        id: p[0],
+        ru: p[1],
+        en: p[2],
+        category: p[3],
+        unit: p[4],
+        sleeve: p[4] === "pcs" && Number(p[5]) === 25,
+        previous: state[p[0]]?.q ?? null,
+        revision: v5Revision_(p, events, state),
+        zones: v8ProductZones_(p),
+      }));
+    if (!checklist.length) throw Error("NO_ACTIVE_PRODUCTS");
+    const payload = JSON.stringify({
+      products: checklist,
+      recoveryId: id,
+      recoveredFrom: pending.sessionId,
+    });
+    if (payload.length > 45000) throw Error("CHECKLIST_TOO_LARGE");
+    if (!close) {
+      sheet.appendRow([
+        closeId,
+        new Date().toISOString(),
+        email,
+        "CLOSE",
+        pending.sessionId,
+        fingerprint,
+        JSON.stringify({
+          status: "REPLACED",
+          successorId: successorId,
+          recoveryId: id,
+          blockedRequestId: pending.id,
+        }),
+      ]);
+      SpreadsheetApp.flush();
+    }
+    sheet.appendRow([
+      successorId,
+      new Date().toISOString(),
+      email,
+      "START",
+      successorId,
+      webHash_("START_V5"),
+      payload,
+    ]);
+    SpreadsheetApp.flush();
+    return {
+      status: "RECOVERED",
+      sessionId: successorId,
+      recoveredFrom: pending.sessionId,
+    };
+  });
 }
 
 // Run once from the editor as owner. No stock, catalog, trigger, or Telegram changes.

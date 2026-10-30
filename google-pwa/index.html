@@ -154,6 +154,26 @@
             is unknown.
           </p>
           <button id="retry" class="primary">Retry safely</button>
+          <button id="recover-count" type="button" hidden>
+            Recover count with current zones
+          </button>
+          <p id="recovery-help" class="help"></p>
+          <button id="download-count-backup" type="button">
+            Download saved count backup
+          </button>
+        </section>
+        <section
+          id="recovery-panel"
+          class="panel"
+          hidden
+          aria-labelledby="recovery-heading"
+        >
+          <h2 id="recovery-heading">Count recovered — review changed zones</h2>
+          <p id="recovery-summary"></p>
+          <div id="recovery-review"></div>
+          <button id="download-recovery" type="button">
+            Download original count backup
+          </button>
         </section>
         <section id="conflicts-panel" class="panel" hidden>
           <h2>Review changed products</h2>
@@ -225,7 +245,7 @@
         </button>
         <div id="feature-content"></div>
       </section>
-      <p class="help app-version">VARKA · Mobile interface v3</p>
+      <p class="help app-version">VARKA · Mobile interface v3.1</p>
     </main>
     <dialog id="feature-dialog"><form id="feature-form"></form></dialog>
   </body>

@@ -10,6 +10,7 @@ import {
   normalizeSnapshot,
   effectiveSession,
   quantity,
+  recoverCountDraft,
 } from "./model.js";
 const $ = (selector) => document.querySelector(selector);
 const initial = () => ({
@@ -32,6 +33,7 @@ let transport,
   busy = false,
   storageOkay = true;
 let featuresEnabled = false;
+let countRecoveryEnabled = false;
 let connectionOpen = false;
 let fieldId = 0;
 let conflicts = [];
@@ -42,7 +44,12 @@ const checklist = () =>
     record.snapshot?.catalog,
   );
 const hasPending = () =>
-  Boolean(record.pending || record.startPending || record.featurePending);
+  Boolean(
+    record.pending ||
+    record.startPending ||
+    record.featurePending ||
+    record.recoveryPending,
+  );
 const features = createFeatures({
   record: () => record,
   config: () => config,
@@ -52,6 +59,7 @@ const features = createFeatures({
   message,
   guard,
   focusView,
+  downloadRecovery,
   pending: hasPending,
   busy: () => busy,
   supported: () => featuresEnabled || Boolean(record.featuresSupported),
@@ -162,6 +170,19 @@ function controls() {
     ? "Start awaiting confirmation — Retry safely"
     : "Start count session";
   $("#retry").disabled = busy || !connected;
+  $("#recover-count").hidden = !record.pending && !record.recoveryPending;
+  $("#recover-count").disabled =
+    busy ||
+    !connected ||
+    !writesEnabled ||
+    !countRecoveryEnabled ||
+    !storageOkay;
+  $("#recovery-help").textContent =
+    record.pending || record.recoveryPending
+      ? countRecoveryEnabled
+        ? "For a frozen-zone error: recovery checks the old outcome, replaces the checklist if safe, and preserves your draft for review."
+        : "Zone recovery needs the updated PwaBridge.gs deployment. Your pending request and counts are still saved."
+      : "";
   $("#pending-panel").hidden = !pending;
   $("#lock").disabled = busy || pending;
   $("#submit").disabled =
@@ -170,12 +191,19 @@ function controls() {
     !connected ||
     !writesEnabled ||
     !storageOkay ||
+    Boolean(
+      record.recoveryReview?.needsReview?.length ||
+      record.recoveryReview?.catalogNeedsReview,
+    ) ||
     conflicts.length > 0;
   $("#keep-current").disabled = busy || pending;
   $("#products")
     .querySelectorAll("input,select")
     .forEach((node) => (node.disabled = busy || pending));
   $("#conflicts")
+    .querySelectorAll("button")
+    .forEach((node) => (node.disabled = busy || pending));
+  $("#recovery-review")
     .querySelectorAll("button")
     .forEach((node) => (node.disabled = busy || pending));
   $("#incomplete").disabled = busy || pending;
@@ -329,7 +357,11 @@ function field(spec, zoneId, draft) {
       if ($("#draft-feedback").textContent !== savedMessage)
         $("#draft-feedback").textContent = savedMessage;
       conflicts = changedDrafts(
-        { ...record.snapshot, session: checklist() },
+        {
+          ...record.snapshot,
+          session: checklist(),
+          productChanges: record.productChanges,
+        },
         record.drafts,
       );
       renderConflicts();
@@ -379,8 +411,11 @@ function flag(spec, keyName, labelText) {
 function renderConflicts() {
   const target = $("#conflicts");
   target.replaceChildren();
-  $("#conflicts-panel").hidden = !conflicts.length;
-  for (const id of conflicts) {
+  const regular = conflicts.filter(
+    (id) => !record.recoveryReview?.needsReview?.includes(id),
+  );
+  $("#conflicts-panel").hidden = !regular.length;
+  for (const id of regular) {
     const current = record.snapshot?.stock.products.find((p) => p.id === id);
     const draft = record.drafts[id];
     if (!draft || record.productChanges?.some((c) => c.id === id)) {
@@ -418,6 +453,15 @@ function renderConflicts() {
       Boolean(current.sleeve) === draft.sleeve &&
       JSON.stringify([...(current.zones || [])].sort()) ===
         JSON.stringify([...(draft.zones || [])].sort());
+    const checklistChanged =
+      current &&
+      spec &&
+      JSON.stringify([...(current.zones || [])].sort()) !==
+        JSON.stringify([...(spec.zones || [])].sort());
+    if (checklistChanged)
+      card.append(
+        button("Recover frozen checklist — keep my draft", beginRecovery),
+      );
     if (compatible)
       card.append(
         button("I rechecked — keep entered count", () => {
@@ -444,6 +488,156 @@ function renderConflicts() {
     );
     target.append(card);
   }
+}
+function downloadRecovery() {
+  const file = new Blob(
+    [
+      JSON.stringify(
+        {
+          format: "varka-count-backup-1",
+          exportedAt: new Date().toISOString(),
+          account: config.email,
+          endpoint: config.endpoint,
+          session: record.session,
+          drafts: record.drafts,
+          productChanges: record.productChanges || [],
+          pending: record.pending,
+          recoveryPending: record.recoveryPending,
+          recoveryArchives: record.recoveryArchives || [],
+        },
+        null,
+        2,
+      ),
+    ],
+    { type: "application/json" },
+  );
+  const url = URL.createObjectURL(file),
+    link = document.createElement("a");
+  link.href = url;
+  link.download = `varka-count-backup-${new Date().toISOString().replace(/:/g, "-")}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function renderRecovery() {
+  const review = record.recoveryReview;
+  $("#recovery-panel").hidden = !review;
+  const root = $("#recovery-review");
+  root.replaceChildren();
+  if (!review) return;
+  const archive = record.recoveryArchives.find(
+    (item) => item.id === review.archiveId,
+  );
+  $("#recovery-summary").textContent =
+    "The old checklist was closed without a stock write. Every original entry is retained in a local backup. Matching zone values are kept; new zones stay blank. Review and physically recheck changed assignments before submitting.";
+  for (const id of review.needsReview) {
+    const original = archive.drafts[id],
+      draft = record.drafts[id],
+      spec = record.session.items.find((item) => item.id === id);
+    const card = text("div", undefined, "conflict");
+    card.append(
+      text(
+        "h3",
+        spec?.ru ||
+          archive.session?.items.find((item) => item.id === id)?.ru ||
+          id,
+      ),
+      text(
+        "p",
+        `Original values: ${
+          Object.entries(original.locations || {})
+            .map(
+              ([zone, item]) =>
+                `${zone}: ${item.value === "" ? "(blank)" : item.value} ${item.unit === "SLEEVE_25" ? "×25 pcs" : original.unit}`,
+            )
+            .join(" · ") || "(blank)"
+        }`,
+      ),
+      text(
+        "p",
+        spec
+          ? `Current zones: ${(spec.zones?.length ? spec.zones : ["unassigned"]).join(", ")} · ${spec.unit}. Recheck every current zone below, then confirm here.`
+          : "This product is not active in the replacement checklist. Its original values remain in the backup and will not be submitted.",
+      ),
+    );
+    if (spec)
+      card.append(
+        button("I rechecked every current zone — use these values", () => {
+          const reviewed = record.drafts[id];
+          if (!reviewed)
+            throw Error(
+              "Enter counts for the current zones first. The original values remain in the backup.",
+            );
+          const current = record.snapshot.catalog.find(
+            (item) => item.id === id,
+          );
+          if (
+            !current ||
+            current.unit !== spec.unit ||
+            JSON.stringify([...(current.zones || [])].sort()) !==
+              JSON.stringify([...(spec.zones || [])].sort())
+          )
+            throw Error(
+              "The catalog changed again. Recover the checklist again before confirming this item.",
+            );
+          for (const zone of spec.zones?.length ? spec.zones : ["unassigned"]) {
+            const entry = reviewed.locations[zone];
+            if (!entry || !String(entry.value).trim())
+              throw Error(
+                `Enter a physical count for every current zone of ${spec.ru}, including 0 where empty.`,
+              );
+            if (entry.unit === "SLEEVE_25" && !spec.sleeve)
+              throw Error("Sleeve packaging changed. Enter base units.");
+            if (!["BASE", "SLEEVE_25"].includes(entry.unit))
+              throw Error("Choose a valid input unit.");
+            quantity(entry.value, spec.unit, entry.unit === "SLEEVE_25");
+          }
+          reviewed.zones = [...(spec.zones || [])];
+          reviewed.unit = spec.unit;
+          reviewed.sleeve = Boolean(spec.sleeve);
+          reviewed.revision = current.revision;
+          reviewed.countedAt = new Date().toISOString();
+          review.needsReview = review.needsReview.filter(
+            (value) => value !== id,
+          );
+          persist();
+          render();
+        }),
+      );
+    else
+      card.append(
+        button("Keep in backup only — exclude from submission", () => {
+          delete record.drafts[id];
+          review.needsReview = review.needsReview.filter(
+            (value) => value !== id,
+          );
+          persist();
+          render();
+        }),
+      );
+    root.append(card);
+  }
+  if (review.catalogNeedsReview) {
+    root.append(
+      text(
+        "p",
+        "Your staged catalog changes were backed up, not automatically reapplied. Review Catalog and restage them if still needed.",
+      ),
+      button("I reviewed the archived catalog changes", () => {
+        review.catalogNeedsReview = false;
+        persist();
+        render();
+      }),
+    );
+  }
+  if (!review.needsReview.length && !review.catalogNeedsReview)
+    root.append(
+      text(
+        "p",
+        "Review complete. Your counts are ready for the usual revision checks when you submit. Nothing has been sent automatically.",
+      ),
+    );
 }
 function render() {
   const snapshot = record.snapshot;
@@ -481,7 +675,11 @@ function render() {
     ? `Session ${session.id} · ${session.status}. ${counting ? "Every assigned storage zone is required for a counted product." : "Start a new session for another count."}`
     : "Start a session online before entering offline counts.";
   $("#submit-panel").hidden = !counting;
-  conflicts = changedDrafts({ ...snapshot, session }, record.drafts);
+  conflicts = changedDrafts(
+    { ...snapshot, session, productChanges: record.productChanges },
+    record.drafts,
+  );
+  renderRecovery();
   for (const change of record.productChanges || []) {
     if (
       snapshot.catalog.find((p) => p.id === change.id)?.version !==
@@ -598,6 +796,8 @@ async function resumeStart() {
 }
 function committed(result) {
   record.pending = null;
+  record.recoveryPending = null;
+  record.recoveryReview = null;
   record.drafts = {};
   record.productChanges = [];
   record.keepCurrent = false;
@@ -613,6 +813,7 @@ function committed(result) {
   );
 }
 async function retry() {
+  if (record.recoveryPending) return resumeRecovery();
   if (record.featurePending) return retryFeature();
   if (record.startPending) return resumeStart();
   if (!record.pending) return;
@@ -644,6 +845,74 @@ async function retry() {
     );
   committed(result);
   await refresh();
+}
+async function beginRecovery() {
+  if (!authenticated || !navigator.onLine || !writesEnabled)
+    throw Error(
+      "Sign in online with writes enabled before recovering a checklist. Your draft is unchanged.",
+    );
+  if (!countRecoveryEnabled)
+    throw Error(
+      "Update and redeploy PwaBridge.gs, then sign in again to enable count recovery. Your draft is unchanged.",
+    );
+  if (record.featurePending || record.startPending)
+    throw Error("Resolve the other pending operation first.");
+  if (!record.recoveryPending) {
+    if (
+      !confirm(
+        "Recovery first checks whether your old count committed. If not, it closes that checklist and starts a current one. All local values are backed up; changed zones require physical rechecking. Continue?",
+      )
+    )
+      return;
+    record.recoveryPending = {
+      id: crypto.randomUUID(),
+      successorId: crypto.randomUUID(),
+      pending: structuredClone(
+        record.pending || {
+          id: crypto.randomUUID(),
+          sessionId: record.session.id,
+          items: [],
+          incomplete: true,
+        },
+      ),
+    };
+    persist();
+    controls();
+  }
+  await resumeRecovery();
+}
+async function resumeRecovery() {
+  const recovery = record.recoveryPending;
+  const result = await rpc("recoverCount", recovery);
+  if (result.status === "COMMITTED") {
+    committed(result.result);
+    await refresh();
+    return;
+  }
+  if (result.status !== "RECOVERED")
+    throw Error(
+      result.status === "UNCONFIRMED"
+        ? "An unconfirmed batch exists. Keep the saved request; the owner must inspect it before recovery."
+        : "This session changed or was closed elsewhere. Keep your draft and ask the owner to check its history.",
+    );
+  const snapshot = await rpc("load", { sessionId: result.sessionId });
+  const candidate = recoverCountDraft(record, snapshot, recovery);
+  try {
+    saveRecord(localStorage, key(), candidate);
+  } catch {
+    storageOkay = false;
+    throw Error(
+      "The server checklist was recovered, but device storage is full. Your original saved request is retained. Free storage and Retry safely; do not clear app data.",
+    );
+  }
+  record = candidate;
+  storageOkay = true;
+  features.stock();
+  render();
+  focusView();
+  message(
+    "Checklist recovered. Your original values are backed up on this device. Review changed zones before submitting.",
+  );
 }
 async function retryFeature() {
   const pending = record.featurePending;
@@ -701,6 +970,7 @@ $("#connect-form").addEventListener("submit", (event) => {
     connectionOpen = false;
     writesEnabled = capabilities.writesEnabled === true;
     featuresEnabled = capabilities.features === 2;
+    countRecoveryEnabled = capabilities.countRecovery === 1;
     saveRecord(localStorage, "varka-google:configuration", config);
     restore();
     record.featuresSupported = featuresEnabled;
@@ -717,9 +987,17 @@ $("#connect-form").addEventListener("submit", (event) => {
 $("#refresh").addEventListener("click", () => guard(refresh));
 $("#start").addEventListener("click", () => guard(start));
 $("#retry").addEventListener("click", () => guard(retry));
+$("#recover-count").addEventListener("click", () => guard(beginRecovery));
+$("#download-count-backup").addEventListener("click", downloadRecovery);
+$("#download-recovery").addEventListener("click", downloadRecovery);
 $("#submit").addEventListener("click", () =>
   guard(async () => {
     if (conflicts.length) throw Error("Review changed products first.");
+    if (
+      record.recoveryReview?.needsReview.length ||
+      record.recoveryReview?.catalogNeedsReview
+    )
+      throw Error("Complete the recovered zone review first.");
     record.pending = buildSubmission(checklist(), record.drafts, {
       keepCurrent: record.keepCurrent,
       incomplete: record.incomplete,
@@ -765,6 +1043,7 @@ $("#clear-draft").addEventListener("click", () =>
     )
       return;
     record.drafts = {};
+    record.recoveryReview = null;
     record.productChanges = [];
     record.keepCurrent = false;
     record.incomplete = false;

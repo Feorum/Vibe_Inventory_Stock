@@ -124,11 +124,81 @@ export function changedDrafts(snapshot, drafts) {
       spec = specs.get(id);
     if (!current || !spec || current.revision !== drafts[id].revision)
       return true;
+    const staged = snapshot.productChanges?.find((change) => change.id === id);
+    const expectedZones = staged ? staged.zones : current.zones || [];
     return (
+      current.unit !== drafts[id].unit ||
+      Boolean(current.sleeve) !== Boolean(drafts[id].sleeve) ||
+      JSON.stringify([...expectedZones].sort()) !==
+        JSON.stringify([...(spec.zones || [])].sort()) ||
       JSON.stringify([...(spec.zones || [])].sort()) !==
-      JSON.stringify([...(drafts[id].zones || [])].sort())
+        JSON.stringify([...(drafts[id].zones || [])].sort())
     );
   });
+}
+
+// Do not edit the supplied record: persist the returned candidate BEFORE
+// replacing in-memory state, so quota errors retain the original pending data.
+export function recoverCountDraft(record, snapshot, recovery) {
+  if (
+    snapshot.session?.id !== recovery.successorId ||
+    snapshot.session.status !== "OPEN"
+  )
+    throw Error(
+      "The replacement checklist is not open. Keep the saved request and ask the owner to review.",
+    );
+  const candidate = structuredClone(record);
+  candidate.recoveryArchives ||= [];
+  if (!candidate.recoveryArchives.some((archive) => archive.id === recovery.id))
+    candidate.recoveryArchives.push(
+      structuredClone({
+        id: recovery.id,
+        recoveredAt: new Date().toISOString(),
+        session: record.session,
+        drafts: structuredClone(record.drafts),
+        productChanges: structuredClone(record.productChanges || []),
+        catalog: record.snapshot?.catalog || [],
+        pending: record.pending,
+        keepCurrent: record.keepCurrent,
+        incomplete: record.incomplete,
+      }),
+    );
+  candidate.snapshot = normalizeSnapshot(snapshot);
+  candidate.session = structuredClone(snapshot.session);
+  candidate.pending = null;
+  candidate.recoveryPending = null;
+  candidate.productChanges = [];
+  candidate.lastSync = new Date().toISOString();
+  const needsReview = [];
+  for (const [id, draft] of Object.entries(candidate.drafts)) {
+    const spec = snapshot.session.items.find((item) => item.id === id);
+    const metadataChanged =
+      !spec ||
+      spec.unit !== draft.unit ||
+      Boolean(spec.sleeve) !== Boolean(draft.sleeve) ||
+      JSON.stringify([...(spec.zones || [])].sort()) !==
+        JSON.stringify([...(draft.zones || [])].sort());
+    const countedAt = Date.parse(draft.countedAt),
+      created = Date.parse(snapshot.session.created);
+    const oldTime =
+      !Number.isFinite(countedAt) ||
+      (Number.isFinite(created) && countedAt < created - 86400000);
+    if (metadataChanged || oldTime) needsReview.push(id);
+    // A different unit/packaging needs new physical input, never an implicit
+    // conversion. Every original value remains in the independent archive.
+    if (
+      spec &&
+      (spec.unit !== draft.unit ||
+        Boolean(spec.sleeve) !== Boolean(draft.sleeve))
+    )
+      draft.locations = {};
+  }
+  candidate.recoveryReview = {
+    archiveId: recovery.id,
+    needsReview,
+    catalogNeedsReview: Boolean(record.productChanges?.length),
+  };
+  return candidate;
 }
 
 export function effectiveSession(session, changes = [], catalog = []) {

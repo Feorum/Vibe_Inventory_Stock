@@ -25,6 +25,8 @@ With no configured staff credentials, nonproduction mode provides a clearly labe
 
 For the Google-backed app's phone layout and accessibility behavior, see [Mobile interface v3](docs/mobile-accessibility.md). This frontend-only update is published using the existing Pages workflow; it does not require changes to Apps Script.
 
+For a pending **`ZONES_CHANGED`** count, use the [v3.1 recovery update](docs/google-mode.md#fixing-a-pending-zones_changed-count-interface-v31). Unlike the visual redesign, that fix also requires replacing and redeploying `PwaBridge.gs` (no installer). It preserves original count values, checks the old outcome under the script lock, and requires review of the current zones. Never clear browser storage to unstick a pending count.
+
 ## Staff access
 
 Copy `.env.example` to `.env` and set `OWNER_EMAIL` and a strong `APP_PASSWORD` of at least 12 characters. On first startup, these provision that owner; sign in using the email and password as the individual access code. Existing account codes are not reset on subsequent startups. Imported profiles do not include their old Apps Script access codes.

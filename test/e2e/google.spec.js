@@ -13,7 +13,10 @@ const template = await readFile(
   "utf8",
 );
 
-async function mockGoogle(page, { writes = true, owner = false } = {}) {
+async function mockGoogle(
+  page,
+  { writes = true, owner = false, countRecovery = true } = {},
+) {
   const product = {
     id: "P001",
     ru: "Молоко",
@@ -51,6 +54,8 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
     history: { entries: [], revisions: [], more: false },
     dropFeature: false,
     effects: 0,
+    recoveries: new Map(),
+    recoveryCalls: 0,
   };
   await page.route("https://script.google.com/**", async (route) => {
     const channel = new URL(route.request().url()).searchParams.get("channel");
@@ -106,7 +111,12 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
       ],
     });
     if (request.method === "ping")
-      result = { protocol: 1, features: 2, writesEnabled: writes };
+      result = {
+        protocol: 1,
+        features: 2,
+        countRecovery: countRecovery ? 1 : undefined,
+        writesEnabled: writes,
+      };
     else if (request.method === "login")
       result = { email, token: "memory-only-token" };
     else if (request.token !== "memory-only-token") {
@@ -137,6 +147,21 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
     else if (request.method === "submit") {
       backend.lastCountRequest = request.body;
       const item = request.body.items[0];
+      const staged = request.body.productChanges?.find(
+        (change) => change.id === item.id,
+      );
+      if (
+        !staged &&
+        JSON.stringify(
+          [
+            ...(backend.session.items.find((p) => p.id === item.id).zones ||
+              []),
+          ].sort(),
+        ) !== JSON.stringify([...product.zones].sort())
+      ) {
+        await route.fulfill({ json: { ok: false, error: "ZONES_CHANGED" } });
+        return;
+      }
       if (item.revision !== product.revision)
         result = { rejected: true, error: "CONFLICT" };
       else {
@@ -156,6 +181,34 @@ async function mockGoogle(page, { writes = true, owner = false } = {}) {
           await route.abort();
           return;
         }
+      }
+    } else if (request.method === "recoverCount") {
+      backend.recoveryCalls++;
+      if (backend.committed.has(request.body.pending.id))
+        result = {
+          status: "COMMITTED",
+          result: backend.committed.get(request.body.pending.id),
+        };
+      else {
+        if (!backend.recoveries.has(request.body.id)) {
+          backend.recoveries.set(request.body.id, request.body.successorId);
+          backend.session = {
+            id: request.body.successorId,
+            by: email,
+            status: "OPEN",
+            created: new Date().toISOString(),
+            items: [{ ...product, checked: false }],
+          };
+        }
+        result = {
+          status: "RECOVERED",
+          sessionId: backend.recoveries.get(request.body.id),
+        };
+      }
+      if (backend.dropRecovery) {
+        backend.dropRecovery = false;
+        await route.abort();
+        return;
       }
     } else if (request.method === "information") result = backend.information;
     else if (request.method === "settings") result = backend.settings;
@@ -699,6 +752,107 @@ test("Google mode requires explicit review of a second-device change before subm
   await expect(page.locator("#refresh")).toBeEnabled({ timeout: 15000 });
   await expect(page.locator("#products")).toContainText("1.25 l");
   expect(backend.submissions).toBe(1);
+});
+
+test("A blocked zone submission recovers without losing values, including removed zones and zero", async ({
+  page,
+}) => {
+  const backend = await mockGoogle(page);
+  await page.goto(path);
+  await login(page);
+  await startCount(page);
+  // Change zones without refreshing: this reproduces the raw legacy exception
+  // and old client pending-state trap, rather than an ordinary CONFLICT reply.
+  backend.product.zones = ["shelf", "freezer"];
+  backend.product.version = "zones-2";
+  backend.product.revision = "revision-zone-2";
+  await page.locator("#submit").click();
+  await expect(page.locator("#message")).toContainText("ZONES_CHANGED");
+  await expect(page.locator("#pending-panel")).toBeVisible();
+  await expect(page.locator("#recover-count")).toBeEnabled();
+  page.once("dialog", (dialog) => dialog.accept());
+  backend.dropRecovery = true;
+  await page.locator("#recover-count").click();
+  await expect(page.locator("#message")).toContainText(
+    "GOOGLE_EXECUTION_FAILED",
+  );
+  await page.reload();
+  await login(page);
+  await page.locator("#retry").click();
+  await expect(page.locator("#pending-panel")).toBeHidden();
+  await expect(page.locator("#recovery-panel")).toBeVisible();
+  expect(backend.recoveries.size).toBe(1);
+  await expect(page.locator('input[data-zone="shelf"]')).toHaveValue("0");
+  await expect(page.locator('input[data-zone="freezer"]')).toHaveValue("");
+  await expect(page.locator("#recovery-review")).toContainText(
+    "fridge: 1.25 l",
+  );
+  await expect(page.locator("#submit")).toBeDisabled();
+  const reviewed = page.getByRole("button", {
+    name: "I rechecked every current zone — use these values",
+  });
+  await reviewed.click();
+  await expect(page.locator("#message")).toContainText("every current zone");
+  await page.locator('input[data-zone="freezer"]').fill("2.5");
+  await reviewed.click();
+  await expect(page.locator("#submit")).toBeEnabled();
+  const backup = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((key) =>
+      key.startsWith("varka-google:https://"),
+    );
+    return JSON.parse(localStorage.getItem(key)).recoveryArchives[0];
+  });
+  expect(backup.drafts.P001.locations.fridge.value).toBe("1.25");
+  expect(backup.drafts.P001.locations.shelf.value).toBe("0");
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#download-recovery").click();
+  expect((await downloadPromise).suggestedFilename()).toContain(
+    "varka-count-backup",
+  );
+  await page.locator("#submit").click();
+  await expect(page.locator("#refresh")).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator("#products")).toContainText("2.5 l");
+  expect(backend.submissions).toBe(1);
+  expect(
+    backend.lastCountRequest.items[0].locations.map((l) => l.zoneId),
+  ).toEqual(["shelf", "freezer"]);
+});
+
+test("Recovering an already committed count confirms it instead of opening another session", async ({
+  page,
+}) => {
+  const backend = await mockGoogle(page);
+  await page.goto(path);
+  await login(page);
+  await startCount(page);
+  backend.dropSubmit = true;
+  await page.locator("#submit").click();
+  await expect(page.locator("#message")).toContainText(
+    "GOOGLE_EXECUTION_FAILED",
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#recover-count").click();
+  await expect(page.locator("#pending-panel")).toBeHidden();
+  await expect(page.locator("#recovery-panel")).toBeHidden();
+  expect(backend.submissions).toBe(1);
+  expect(backend.recoveries.size).toBe(0);
+});
+
+test("An old bridge cannot clear the pending count through an unsupported recovery", async ({
+  page,
+}) => {
+  const backend = await mockGoogle(page, { countRecovery: false });
+  await page.goto(path);
+  await login(page);
+  await startCount(page);
+  backend.product.zones = ["shelf"];
+  await page.locator("#submit").click();
+  await expect(page.locator("#pending-panel")).toBeVisible();
+  await expect(page.locator("#recover-count")).toBeDisabled();
+  await expect(page.locator("#recovery-help")).toContainText(
+    "updated PwaBridge.gs",
+  );
+  await expect(page.locator("#download-count-backup")).toBeEnabled();
 });
 
 test("Google staged checklist changes travel in the same count envelope and cached information works offline", async ({

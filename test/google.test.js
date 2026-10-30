@@ -12,6 +12,7 @@ import {
   changedDrafts,
   normalizeSnapshot,
   effectiveSession,
+  recoverCountDraft,
 } from "../google-pwa/model.js";
 import {
   deploymentUrl,
@@ -389,6 +390,319 @@ function bridge(properties = {}) {
     context,
   };
 }
+
+function recoveryRuntime() {
+  const runtime = bridge({ PWA_WRITES_ENABLED: "true" });
+  const oldId = "old-session-1234567890",
+    newId = "new-session-1234567890";
+  const product = [
+    "P001",
+    "Молоко",
+    "Milk",
+    "Dairy",
+    "l",
+    "",
+    "YES",
+    "",
+    24,
+    "",
+    "",
+    "",
+    "revision-current",
+    "",
+    JSON.stringify(["shelf"]),
+  ];
+  const rows = [
+    ["Operation ID", "Time", "User", "Action", "Session ID", "Hash", "JSON"],
+    [
+      oldId,
+      "2026-10-30T10:00:00Z",
+      "staff@example.test",
+      "START",
+      oldId,
+      "hash",
+      JSON.stringify({ products: [{ ...spec }] }),
+    ],
+  ];
+  const raw = [];
+  let locked = false,
+    failAfterAppend = 0,
+    appended = 0;
+  const sheet = {
+    getDataRange: () => ({ getValues: () => rows.map((row) => [...row]) }),
+    appendRow: (row) => {
+      rows.push([...row]);
+      if (++appended === failAfterAppend) throw Error("LOST_JOURNAL_REPLY");
+    },
+  };
+  const hash = (value) =>
+    createHash("sha256").update(String(value)).digest("hex");
+  const readSession = (id) => {
+    const start = rows.find((row) => row[3] === "START" && row[4] === id);
+    if (!start) throw Error("SESSION_NOT_FOUND");
+    const close = rows
+      .filter((row) => row[3] === "CLOSE" && row[4] === id)
+      .at(-1);
+    return {
+      id,
+      by: start[2],
+      status: close ? JSON.parse(close[6]).status : "OPEN",
+      snapshot: JSON.parse(start[6]).products,
+    };
+  };
+  Object.assign(runtime.context, {
+    v3Lock_: (fn) => {
+      assert.equal(locked, false);
+      locked = true;
+      try {
+        return fn();
+      } finally {
+        locked = false;
+      }
+    },
+    webHash_: hash,
+    v5RawEvents_: () => {
+      assert.equal(locked, true);
+      return raw;
+    },
+    v5Decode_: (row) => row.batch || null,
+    book_: () => ({
+      getSheetByName: (name) => {
+        assert.equal(name, "InventorySessions");
+        return sheet;
+      },
+    }),
+    v4Session_: readSession,
+    rows_: (name) => (name === "Products" ? [product] : []),
+    baselines_: () => ({}),
+    totalState_: () => ({ P001: { q: 5 } }),
+    v5Revision_: () => "revision-current",
+    v8ProductZones_: (p) => JSON.parse(p[14]),
+  });
+  const pending = {
+    id: "blocked-count-1234567890",
+    sessionId: oldId,
+    items: [],
+    incomplete: false,
+  };
+  const body = {
+    id: "recovery-operation-1234567",
+    successorId: newId,
+    pending,
+  };
+  return {
+    ...runtime,
+    rows,
+    raw,
+    body,
+    product,
+    readSession,
+    hash,
+    failAfter: (n) => {
+      failAfterAppend = n;
+    },
+    recover: (request = body) =>
+      runtime.dispatch({
+        method: "recoverCount",
+        token: "session",
+        body: request,
+      }),
+  };
+}
+
+test("Count recovery closes the frozen session before opening its replacement, without any stock write", () => {
+  const fixture = recoveryRuntime();
+  assert.equal(fixture.recover().data.status, "RECOVERED");
+  assert.equal(
+    fixture.readSession(fixture.body.pending.sessionId).status,
+    "REPLACED",
+  );
+  const replacement = fixture.readSession(fixture.body.successorId);
+  assert.equal(replacement.status, "OPEN");
+  assert.deepEqual(replacement.snapshot[0].zones, ["shelf"]);
+  assert.equal(fixture.raw.length, 0);
+  // This is the legacy submit precondition, executed under the same lock.
+  assert.throws(
+    () =>
+      fixture.context.v3Lock_(() => {
+        if (
+          fixture.readSession(fixture.body.pending.sessionId).status !== "OPEN"
+        )
+          throw Error("SESSION_CLOSED");
+      }),
+    /SESSION_CLOSED/,
+  );
+  assert.equal(fixture.recover().data.status, "RECOVERED");
+  assert.equal(fixture.rows.filter((row) => row[3] === "CLOSE").length, 1);
+  assert.equal(fixture.rows.filter((row) => row[3] === "START").length, 2);
+});
+test("Recovery returns the original committed result instead of replacing a committed session", () => {
+  const fixture = recoveryRuntime();
+  fixture.raw.push({
+    0: "V5BATCH:" + fixture.body.pending.id,
+    batch: {
+      by: "staff@example.test",
+      sessionId: fixture.body.pending.sessionId,
+      requestHash: fixture.hash(JSON.stringify(fixture.body.pending)),
+      events: [{}],
+      status: "COMPLETE",
+      missing: [],
+    },
+  });
+  assert.equal(fixture.recover().data.status, "COMMITTED");
+  assert.equal(fixture.rows.length, 2);
+});
+test("An unconfirmed batch or a session closed elsewhere is not replaced", () => {
+  const fixture = recoveryRuntime();
+  fixture.raw.push({ 0: "V5BATCH:" + fixture.body.pending.id });
+  assert.equal(fixture.recover().data.status, "UNCONFIRMED");
+  assert.equal(fixture.rows.length, 2);
+  fixture.raw.length = 0;
+  fixture.rows.push([
+    "other-close",
+    "2026-10-30T11:00:00Z",
+    "staff@example.test",
+    "CLOSE",
+    fixture.body.pending.sessionId,
+    "",
+    JSON.stringify({ status: "COMPLETE" }),
+  ]);
+  assert.equal(fixture.recover().data.status, "SESSION_CHANGED");
+  assert.equal(fixture.rows.length, 3);
+});
+test("Lost close/start acknowledgements repair the same recovery, never duplicate sessions", () => {
+  for (const position of [1, 2]) {
+    const fixture = recoveryRuntime();
+    fixture.failAfter(position);
+    assert.equal(fixture.recover().ok, false);
+    assert.equal(fixture.recover().data.status, "RECOVERED");
+    assert.equal(fixture.rows.filter((row) => row[3] === "CLOSE").length, 1);
+    assert.equal(fixture.rows.filter((row) => row[3] === "START").length, 2);
+  }
+});
+test("Recovery is owner-scoped, gated by writes, and actor/body bound on replay", () => {
+  const fixture = recoveryRuntime();
+  fixture.context.webAuth_ = () => "other@example.test";
+  assert.equal(fixture.recover().error, "OWN_SESSION_ONLY");
+  assert.equal(fixture.rows.length, 2);
+  fixture.context.webAuth_ = () => "staff@example.test";
+  fixture.recover();
+  assert.equal(
+    fixture.recover({
+      ...fixture.body,
+      pending: { ...fixture.body.pending, incomplete: true },
+    }).error,
+    "REQUEST_ID_REUSED",
+  );
+  assert.equal(
+    bridge().dispatch({
+      method: "recoverCount",
+      token: "session",
+      body: fixture.body,
+    }).error,
+    "PWA_READ_ONLY",
+  );
+});
+test("Recovery validates a new checklist before closing the old one", () => {
+  const fixture = recoveryRuntime();
+  fixture.product[6] = "NO";
+  assert.equal(fixture.recover().error, "NO_ACTIVE_PRODUCTS");
+  assert.equal(fixture.rows.length, 2);
+});
+
+test("Recovered drafts preserve original values/zeroes and require review for changed zones and old timestamps", () => {
+  const original = {
+    session,
+    snapshot: { catalog: [spec] },
+    drafts: { P001: draft() },
+    pending: { id: "old-op" },
+    productChanges: [],
+    keepCurrent: true,
+  };
+  const snapshot = {
+    session: {
+      ...session,
+      id: "replacement",
+      created: "2026-10-24T13:00:00Z",
+      items: [{ ...spec, zones: ["shelf", "freezer"], revision: "new" }],
+    },
+    catalog: [{ ...spec, zones: ["shelf", "freezer"], revision: "new" }],
+    stock: { products: [{ ...spec, revision: "new" }] },
+  };
+  const recovered = recoverCountDraft(original, snapshot, {
+    id: "recovery",
+    successorId: "replacement",
+  });
+  assert.equal(original.pending.id, "old-op");
+  assert.equal(recovered.pending, null);
+  assert.equal(recovered.drafts.P001.locations.shelf.value, "0");
+  assert.equal(recovered.drafts.P001.locations.fridge.value, "1,25");
+  assert.equal(recovered.drafts.P001.locations.freezer, undefined);
+  assert.equal(recovered.drafts.P001.revision, "old");
+  assert.deepEqual(recovered.recoveryReview.needsReview, ["P001"]);
+  original.drafts.P001.locations.fridge.value = "99";
+  assert.equal(
+    recovered.recoveryArchives[0].drafts.P001.locations.fridge.value,
+    "1,25",
+  );
+  snapshot.session.created = "2026-10-30T13:00:00Z";
+  snapshot.session.items[0].zones = ["fridge", "shelf"];
+  assert.deepEqual(
+    recoverCountDraft(original, snapshot, {
+      id: "next",
+      successorId: "replacement",
+    }).recoveryReview.needsReview,
+    ["P001"],
+  );
+});
+test("New units do not reinterpret old quantities; removed and staged entries remain archived", () => {
+  const original = {
+    session,
+    snapshot: {},
+    drafts: { P001: draft() },
+    pending: {},
+    productChanges: [{ id: "P001", zones: ["fridge"] }],
+  };
+  const snapshot = {
+    session: {
+      ...session,
+      id: "replacement",
+      items: [{ ...spec, unit: "pcs", sleeve: true }],
+    },
+    stock: { products: [] },
+    catalog: [],
+  };
+  const recovered = recoverCountDraft(original, snapshot, {
+    id: "recovery",
+    successorId: "replacement",
+  });
+  assert.deepEqual(recovered.drafts.P001.locations, {});
+  assert.equal(
+    recovered.recoveryArchives[0].drafts.P001.locations.fridge.value,
+    "1,25",
+  );
+  assert.equal(recovered.recoveryReview.catalogNeedsReview, true);
+  assert.deepEqual(recovered.productChanges, []);
+  snapshot.session.items = [];
+  const missing = recoverCountDraft(original, snapshot, {
+    id: "next",
+    successorId: "replacement",
+  });
+  assert.equal(missing.drafts.P001.locations.shelf.value, "0");
+  assert.deepEqual(missing.recoveryReview.needsReview, ["P001"]);
+});
+test("Editing after a catalog zone change is detected even if the draft uses a fresh stock revision", () => {
+  const entry = draft();
+  entry.revision = "fresh";
+  const snapshot = {
+    session,
+    catalog: [],
+    stock: { products: [{ ...spec, revision: "fresh", zones: ["shelf"] }] },
+  };
+  assert.deepEqual(changedDrafts(snapshot, { P001: entry }), ["P001"]);
+  snapshot.productChanges = [{ id: "P001", zones: ["fridge", "shelf"] }];
+  assert.deepEqual(changedDrafts(snapshot, { P001: entry }), []);
+});
 
 test("PWA features journal replays exactly once and rejects actor/body/kind changes", () => {
   const runtime = bridge({ PWA_WRITES_ENABLED: "true" });

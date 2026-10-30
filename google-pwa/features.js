@@ -925,6 +925,17 @@ export function createFeatures(host) {
     }
     if (view === "profile") {
       const card = panel(tr("My profile", "Мой профиль"));
+      if (record.recoveryArchives?.length)
+        card.append(
+          action(
+            tr(
+              "Download original count backups",
+              "Скачать резервные копии пересчётов",
+            ),
+            host.downloadRecovery,
+            { local: true },
+          ),
+        );
       card.append(
         node("p", `${host.config().email} · ${snapshot.profile?.name || ""}`),
         action(tr("Change display name", "Изменить имя"), () => {
