@@ -1,5 +1,7 @@
 # Temporary Google Sheets mode
 
+> The main Pages application now uses the [session-free workspace](google-workspace.md). Follow that guide for the current migration and deployment. This document describes the retained **legacy interface at `legacy.html`**, including recovery of existing pending session submissions. Do not use its older installation steps alone for the new main interface.
+
 This is the Google-backed application: **GitHub Pages → Apps Script bridge → the existing private VARKA workbook**. No Node server, Google API key, service-account key, or public spreadsheet is required. The Node/SQLite application remains unchanged.
 
 Implemented: existing individual sign-in; stock/low/estimated/stale indicators; deliveries and waste with a reason; catalog creation/editing, units/packaging, minimums, intervals, zones, activation/deactivation and archival; session start/resume/expansion; per-zone and sleeve counts; explicit keep-blank/incomplete policies; atomic staged status/zone changes with counts; paginated immutable history and own-entry corrections (history-only or current-stock); reminders, yellow cards, display names; and owner-only Telegram report settings. Feature-screen navigation and forms have EN/RU labels (Profile switches language); some shared connection/count/status text remains bilingual or English.

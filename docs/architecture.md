@@ -1,5 +1,7 @@
 # VARKA architecture
 
+For the currently deployed Google-backed four-page application, see [Workspace architecture and specification checklist](google-workspace.md). It uses Apps Script and the existing workbook, not the Node/SQLite runtime described below. Both runtimes are intentionally separate authoritative alternatives.
+
 ```mermaid
 flowchart LR
     A[Samsung / iPhone PWA] -->|HTTPS| B[Caddy]

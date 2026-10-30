@@ -28,7 +28,11 @@ function pwaPage_(e) {
 function pwaDispatch(request) {
   try {
     pwaOrigin_(); // Fail closed until the owner configures a trusted frontend.
-    if (!request || JSON.stringify(request).length > 60000)
+    // Workspace submissions cover the full catalog, never the current filter.
+    // Keep a bounded request without imposing the legacy single-cell batch size.
+    const requestLimit =
+      request && /^workspace/.test(request.method || "") ? 2000000 : 60000;
+    if (!request || JSON.stringify(request).length > requestLimit)
       throw Error("INVALID_REQUEST");
     const writes =
       PropertiesService.getScriptProperties().getProperty(
@@ -42,11 +46,28 @@ function pwaDispatch(request) {
           protocol: 1,
           features: 2,
           countRecovery: 1,
+          workspace: typeof workspaceDispatch_ === "function" ? 1 : 0,
           writesEnabled: writes,
         };
         break;
       case "login":
         result = webLogin(body.email, body.code);
+        break;
+      case "workspaceLogin":
+      case "workspaceLoad":
+      case "workspaceStatus":
+        if (typeof workspaceDispatch_ !== "function")
+          throw Error("WORKSPACE_NOT_INSTALLED");
+        result = workspaceDispatch_(request.method, request.token, body);
+        break;
+      case "workspaceCount":
+      case "workspaceCatalog":
+      case "workspaceTeam":
+      case "workspaceNotify":
+        if (!writes) throw Error("PWA_READ_ONLY");
+        if (typeof workspaceDispatch_ !== "function")
+          throw Error("WORKSPACE_NOT_INSTALLED");
+        result = workspaceDispatch_(request.method, request.token, body);
         break;
       case "logout":
         result = webLogout(request.token);

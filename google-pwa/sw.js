@@ -1,9 +1,14 @@
 // Relative URLs and a scope-specific cache also work at /Vibe_Inventory_Stock/.
 const PREFIX = `varka-google:${self.registration.scope}:`;
-const CACHE = `${PREFIX}shell-v4`;
+const CACHE = `${PREFIX}shell-v5`;
 const ASSETS = [
   "./",
   "./index.html",
+  "./legacy.html",
+  "./workspace.js",
+  "./workspace.css",
+  "./workspace-model.js",
+  "./locales.js",
   "./style.css",
   "./app.js",
   "./model.js",
@@ -50,7 +55,8 @@ self.addEventListener("fetch", (event) => {
     return;
   if (event.request.mode === "navigate") {
     event.respondWith(
-      fetch(event.request).catch(() =>
+      fetch(event.request).catch(async () =>
+        (await caches.match(event.request, { ignoreSearch: true })) ||
         caches.match(new URL("./", self.registration.scope).href),
       ),
     );

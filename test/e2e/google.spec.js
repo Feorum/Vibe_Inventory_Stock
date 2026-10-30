@@ -5,7 +5,8 @@ import AxeBuilder from "@axe-core/playwright";
 const endpoint = "https://script.google.com/macros/s/TEST-DEPLOYMENT/exec";
 const inner = "https://n-test-script.googleusercontent.com";
 const origin = "http://127.0.0.1:3100";
-const path = "/Vibe_Inventory_Stock/";
+// Legacy workflow remains available to safely finish/recover old submissions.
+const path = "/Vibe_Inventory_Stock/legacy.html";
 const email = "staff@example.test";
 const code = "test-private-code-never-persist-this";
 const template = await readFile(

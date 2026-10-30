@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#234b36" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
+    <title>VARKA · Google mode</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon.svg" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to inventory</a>
+    <header>
+      <div class="brand">
+        <img src="./icons/icon.svg" alt="" width="36" height="36" />
+        <div><strong>VARKA</strong><span>Café inventory</span></div>
+      </div>
+      <span id="connection-badge" class="connection-badge">Not connected</span>
+      <button
+        id="lock"
+        aria-label="Lock &amp; clear saved data"
+        aria-describedby="lock-help"
+        hidden
+      >
+        Lock
+      </button>
+    </header>
+    <main id="main" tabindex="-1">
+      <p id="message" role="status" aria-live="polite" tabindex="-1">
+        Connect your existing VARKA Apps Script deployment.
+      </p>
+      <button id="sign-in-again" type="button" class="primary" hidden>
+        Sign in to synchronize
+      </button>
+      <section class="panel" id="connect-panel">
+        <h1>Connect to the café</h1>
+        <p>
+          The spreadsheet stays private. Use your existing individual VARKA
+          access code, not your Google password.
+        </p>
+        <form id="connect-form">
+          <details id="connection-settings" open>
+            <summary>Google connection settings</summary>
+            <label
+              >Apps Script deployment URL<input
+                id="endpoint"
+                type="url"
+                placeholder="https://script.google.com/macros/s/…/exec"
+                required
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+            /></label>
+          </details>
+          <label
+            >Email<input
+              id="email"
+              type="email"
+              required
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+          /></label>
+          <label
+            >Individual access code<input
+              id="code"
+              type="password"
+              required
+              autocomplete="current-password"
+              maxlength="200"
+          /></label>
+          <button class="primary" id="connect">
+            Sign in &amp; synchronize
+          </button>
+          <button id="hide-connect" type="button" class="subtle" hidden>
+            Continue with saved inventory
+          </button>
+        </form>
+        <p>
+          Codes and login tokens are never saved on this device. Cached
+          inventory and drafts are unencrypted; use only trusted devices. Sign
+          in again after reopening to synchronize.
+        </p>
+        <details>
+          <summary>Install on your phone</summary>
+          <p>
+            First open this HTTPS page online. Samsung: browser menu → Install
+            app. iPhone: Safari → Share → Add to Home Screen. Offline data is
+            available only on devices that have already connected.
+          </p>
+        </details>
+      </section>
+      <section id="workspace" hidden>
+        <div class="workspace-heading">
+          <p class="eyebrow">YOUR CAFÉ · YOUR STOCK</p>
+          <h1 id="view-heading" tabindex="-1">Stock &amp; count</h1>
+          <p id="identity"></p>
+          <details id="sync-details">
+            <summary>Connection &amp; last synchronization</summary>
+            <p id="sync-status"></p>
+            <p id="mode"></p>
+            <p id="lock-help">
+              Lock signs out and clears saved inventory on this device. Unsent
+              drafts are cleared only after your confirmation.
+            </p>
+          </details>
+          <div class="actions">
+            <button id="refresh">Refresh from Google Sheets</button
+            ><button id="start">Start count session</button>
+          </div>
+        </div>
+        <div
+          id="stock-overview"
+          class="stock-overview"
+          aria-label="Inventory overview"
+          role="group"
+        >
+          <div>
+            <span id="metric-products">—</span><span>Active products</span>
+          </div>
+          <div><span id="metric-low">—</span><span>Low / out</span></div>
+          <div><span id="metric-due">—</span><span>Check due</span></div>
+        </div>
+        <nav
+          id="feature-navigation"
+          class="feature-navigation"
+          aria-label="Inventory sections"
+          hidden
+        >
+          <button type="button" data-view="stock">Stock &amp; count</button>
+          <button type="button" data-view="catalog">Catalog</button>
+          <button type="button" data-view="sessions">Sessions</button>
+          <button type="button" data-view="history">History</button>
+          <button type="button" data-view="information">Information</button>
+          <button type="button" data-view="profile">Profile</button>
+        </nav>
+        <section id="pending-panel" class="panel" hidden>
+          <h2>Submission awaiting confirmation</h2>
+          <p>
+            Your original request is saved. Retry checks the same operation ID.
+            Do not recreate this operation from another device while its outcome
+            is unknown.
+          </p>
+          <button id="retry" class="primary">Retry safely</button>
+          <button id="recover-count" type="button" hidden>
+            Recover count with current zones
+          </button>
+          <p id="recovery-help" class="help"></p>
+          <button id="download-count-backup" type="button">
+            Download saved count backup
+          </button>
+        </section>
+        <section
+          id="recovery-panel"
+          class="panel"
+          hidden
+          aria-labelledby="recovery-heading"
+        >
+          <h2 id="recovery-heading">Count recovered — review changed zones</h2>
+          <p id="recovery-summary"></p>
+          <div id="recovery-review"></div>
+          <button id="download-recovery" type="button">
+            Download original count backup
+          </button>
+        </section>
+        <section id="conflicts-panel" class="panel" hidden>
+          <h2>Review changed products</h2>
+          <p>
+            Google Sheets changed after you entered these counts. Refreshing
+            does not overwrite your draft or accept a new balance automatically.
+          </p>
+          <div id="conflicts"></div>
+        </section>
+        <div class="panel" id="search-panel">
+          <label
+            >Search products<input
+              id="search"
+              type="search"
+              placeholder="Name or category"
+          /></label>
+          <p id="count-status"></p>
+          <p id="count-help" class="help">
+            Enter every assigned storage zone. Leave uncounted products blank;
+            enter 0 only when physically empty.
+          </p>
+          <div id="count-progress" hidden>
+            <label id="progress-label" for="count-progress-bar"
+              >Count progress</label
+            >
+            <progress
+              id="count-progress-bar"
+              value="0"
+              max="1"
+              aria-labelledby="progress-label"
+            ></progress>
+            <p id="draft-feedback" class="help" role="status"></p>
+          </div>
+          <label class="check"
+            ><input id="only-low" type="checkbox" />Low/out only / Только
+            заканчивающиеся</label
+          >
+          <p id="results-count" class="help" role="status"></p>
+        </div>
+        <div id="products"></div>
+        <section id="submit-panel" class="panel" hidden>
+          <h2>Finish this count</h2>
+          <p class="help">
+            Choose how to handle blanks before sending. Nothing is submitted
+            automatically.
+          </p>
+          <label class="check"
+            ><input id="keep-current" type="checkbox" />Keep blank items
+            unchanged (blank is never zero)</label
+          >
+          <div class="count-action-bar">
+            <p id="count-action-summary">Your draft stays on this device</p>
+            <button id="submit" class="primary">Synchronize counts</button>
+          </div>
+          <button id="clear-draft" type="button" data-feature="local">
+            Clear local count draft
+          </button>
+          <label class="check"
+            ><input id="incomplete" type="checkbox" />Close as incomplete if
+            some items are blank</label
+          >
+          <p>
+            Offline counts stay on this device until you reconnect, sign in, and
+            synchronize. There is no background submission.
+          </p>
+        </section>
+        <button id="feature-reload" type="button" data-feature="read">
+          Refresh this section
+        </button>
+        <div id="feature-content"></div>
+      </section>
+      <p class="help app-version">VARKA · Mobile interface v3.1</p>
+    </main>
+    <dialog id="feature-dialog"><form id="feature-form"></form></dialog>
+  </body>
+</html>

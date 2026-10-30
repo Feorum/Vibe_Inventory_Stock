@@ -8,9 +8,13 @@ This is a migration of the uploaded snapshot, not continuous Google Sheets synch
 
 ## No rented host yet? Google Sheets prototype
 
-The separate [Google-mode setup guide](docs/google-mode.md) provides a static PWA for GitHub Pages and an authenticated bridge added to the existing Apps Script project. It uses the **same live Google workbook** for stock/counting, deliveries/waste, catalog management, sessions, history/corrections, reminders/cards, profile and owner report settings. Per-device offline snapshots/count drafts and conflict-aware synchronization remain available; other mutations require a connection and have a durable operation journal. No Node server is needed for this mode. Bridge writes default off; the owner must deploy/configure it and complete the real-phone tests. Existing prototype users: follow **Updating the working prototype**, including the new `installPwaFeatures` function. This does not mirror Sheets into SQLite or expose historical migration/trigger administration as daily actions.
+The current Google-backed app is a **four-page, session-free workspace**: Stock, Catalog, Team, and Profile. It runs on GitHub Pages with the existing private workbook and individual Apps Script authentication. Read [Workspace deployment, migration, and specification checklist](docs/google-workspace.md) before updating: this version requires two additional Apps Script files and an owner-run additive migration. Inventory submissions and Telegram delivery have independent durable outcomes; offline drafts remain local to the account, deployment, and workbook.
+
+The [older Google-mode guide](docs/google-mode.md) documents the original bridge and legacy session recovery. The previous interface remains at `legacy.html` to finish pending submissions without discarding their saved requests. The Node/SQLite application below remains separate and unchanged; Google mode does not mirror Sheets into SQLite. No rented host is needed.
 
 ## Run
+
+The remaining runtime, authentication, and workflow sections describe the separate **Node/SQLite** application. For the current Google-backed phone app, use the [workspace guide](docs/google-workspace.md).
 
 Install Node.js 24, then run from the checkout:
 
@@ -23,7 +27,7 @@ Open `http://localhost:3000`. The default database is `data/varka.sqlite`. A fre
 
 With no configured staff credentials, nonproduction mode provides a clearly labeled development owner. **Provision an owner before exposing the server or publishing it.** Production refuses to start without an enabled, provisioned owner and the configured deployment password.
 
-For the Google-backed app's phone layout and accessibility behavior, see [Mobile interface v3](docs/mobile-accessibility.md). This frontend-only update is published using the existing Pages workflow; it does not require changes to Apps Script.
+The earlier [Mobile interface v3 guide](docs/mobile-accessibility.md) describes the retained legacy interface. The new Workspace v4 needs both the Pages update and Apps Script migration described in the workspace guide above.
 
 For a pending **`ZONES_CHANGED`** count, use the [v3.1 recovery update](docs/google-mode.md#fixing-a-pending-zones_changed-count-interface-v31). Unlike the visual redesign, that fix also requires replacing and redeploying `PwaBridge.gs` (no installer). It preserves original count values, checks the old outcome under the script lock, and requires review of the current zones. Never clear browser storage to unstick a pending count.
 

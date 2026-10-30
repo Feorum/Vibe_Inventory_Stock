@@ -9,6 +9,11 @@ export async function buildGooglePages() {
   await mkdir(destination, { recursive: true });
   const files = [
     "index.html",
+    "legacy.html",
+    "workspace.js",
+    "workspace.css",
+    "workspace-model.js",
+    "locales.js",
     "style.css",
     "app.js",
     "model.js",

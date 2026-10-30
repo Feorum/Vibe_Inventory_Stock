@@ -1106,3 +1106,37 @@ test("Apps Script bridge requires exact HTTPS frontend configuration and a rando
     "https://feorum.github.io",
   );
 });
+
+test("Workspace transport stays explicitly allowlisted and read-only until enabled", () => {
+  const runtime = bridge();
+  assert.equal(runtime.dispatch({ method: "ping" }).data.workspace, 0);
+  assert.equal(runtime.dispatch({ method: "workspaceLoad" }).error, "WORKSPACE_NOT_INSTALLED");
+  const calls = [];
+  runtime.context.workspaceDispatch_ = (method, token, body) => {
+    calls.push({ method, token, body });
+    return { value: "workspace" };
+  };
+  assert.equal(runtime.dispatch({ method: "ping" }).data.workspace, 1);
+  for (const method of ["workspaceLogin", "workspaceLoad", "workspaceStatus"])
+    assert.equal(runtime.dispatch({ method, token: "session", body: { id: "operation" } }).data.value, "workspace");
+  for (const method of ["workspaceCount", "workspaceCatalog", "workspaceTeam", "workspaceNotify"])
+    assert.equal(runtime.dispatch({ method, token: "session" }).error, "PWA_READ_ONLY");
+  assert.equal(calls.length, 3);
+  for (const method of ["workspaceDispatch_", "installWorkspace", "installWorkspaceReminders", "workspaceReminderTick"])
+    assert.equal(runtime.dispatch({ method }).error, "METHOD_NOT_ALLOWED");
+  assert.equal(runtime.dispatch({ method: "workspaceLoad", body: { extra: "x".repeat(2000000) } }).error, "INVALID_REQUEST");
+});
+
+test("Workspace writes use fixed methods and allow full-catalog bodies beyond legacy cell size", () => {
+  const runtime = bridge({ PWA_WRITES_ENABLED: "true" });
+  const calls = [];
+  runtime.context.workspaceDispatch_ = (method, token, body) => {
+    calls.push({ method, token, body });
+    return { accepted: true };
+  };
+  const body = { id: "operation", data: "x".repeat(70000) };
+  for (const method of ["workspaceCount", "workspaceCatalog", "workspaceTeam", "workspaceNotify"])
+    assert.equal(runtime.dispatch({ method, token: "session", body }).data.accepted, true);
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every((call) => call.token === "session" && call.body === body));
+});
