@@ -511,6 +511,111 @@ Object.assign(ru, {
   partial:
     "Некоторые записи конфликтуют или не сохранены. Проверьте указанные товары. Принятые записи сохранены, остальные черновики оставлены.",
 });
+Object.assign(en, {
+  version: "VARKA · Workspace v4.1",
+  tipsMode: "Tips",
+  syncQuantityCompact: "Sync quantities",
+  tipsModeHelp:
+    "Show optional explanations and usage tips. Safety warnings and errors always remain visible.",
+  searchCards: "Search cards",
+  savedInventoryOpened:
+    "Saved inventory opened. Sign in online to synchronize.",
+  cardsSearchResult: "{shown} of {total} Yellow Cards",
+  noMatchingCards: "No Yellow Cards match this search.",
+  cardDetails: "Card details",
+  clearCardSearch: "Clear card search",
+  teamSections: "Team sections",
+  recordedShort: "Recorded",
+  countedAtShort: "Counted",
+  telegramSettings: "Telegram notifications",
+  telegramConfigured:
+    "Bot token and destination chat are configured. Send a test to verify delivery.",
+  telegramNotConfigured: "Telegram is not configured yet.",
+  telegramTokenMissing: "The bot token is missing in Apps Script Properties.",
+  telegramChatMissing:
+    "The destination chat ID is missing in Apps Script Properties.",
+  telegramSetupUnavailable:
+    "Update and redeploy the Apps Script bridge to use Telegram setup checks.",
+  telegramSetupInstructions: "Telegram setup instructions",
+  telegramSetupBot:
+    "Create or open your bot with @BotFather in Telegram. Store its token privately as TELEGRAM_TOKEN in Apps Script → Project Settings → Script Properties.",
+  telegramSetupChat:
+    "Start a conversation with the bot, or add it to your café group and send a message. Find the chat ID using the owner-only listWorkspaceTelegramChats function in Apps Script, then store it privately as TELEGRAM_CHAT_ID.",
+  telegramSetupDeploy:
+    "Redeploy the existing Apps Script web app as a New version, refresh the database here, then send a test. Never paste a bot token into this app or into chat.",
+  telegramSetupOwnerOnly:
+    "The owner configures the bot and verifies delivery. No bot credentials are shown in this app.",
+  sendTelegramTest: "Send test notification",
+  confirmTelegramTest:
+    "Send a test message to the configured Telegram chat? No inventory quantities will change.",
+  telegramTestSent: "Telegram test message delivered.",
+  telegramTestReady: "Telegram test message is ready to send.",
+  telegramTestFailed:
+    "The test was rejected by Telegram. Check the server configuration, then retry only the test notification.",
+  telegramTestUnknown:
+    "Test delivery is unconfirmed. Check the Telegram chat. Resending is blocked to avoid a duplicate; you can check delivery status.",
+  telegramTestMissing:
+    "The test could not be sent because Telegram credentials are missing on the server.",
+  retryTelegramTest: "Retry test notification only",
+  telegramTestRunning: "Sending Telegram test…",
+  TELEGRAM_SETUP_NOT_AVAILABLE:
+    "Update the Apps Script Telegram setup code and redeploy the web app.",
+  TELEGRAM_NOT_CONFIGURED:
+    "Set the bot token and destination chat ID privately in Apps Script Properties.",
+});
+Object.assign(ru, {
+  version: "VARKA · Рабочее пространство v4.1",
+  tipsMode: "Подсказки",
+  syncQuantityCompact: "Отправить остатки",
+  tipsModeHelp:
+    "Показывать необязательные пояснения и советы по работе. Предупреждения безопасности и ошибки видны всегда.",
+  searchCards: "Поиск жёлтых карточек",
+  savedInventoryOpened:
+    "Сохранённый склад открыт. Для синхронизации войдите с сетью.",
+  cardsSearchResult: "{shown} из {total} жёлтых карточек",
+  noMatchingCards: "По этому запросу жёлтые карточки не найдены.",
+  cardDetails: "Подробности карточки",
+  clearCardSearch: "Очистить поиск карточек",
+  teamSections: "Разделы команды",
+  recordedShort: "Сохранено",
+  countedAtShort: "Пересчёт",
+  telegramSettings: "Уведомления Telegram",
+  telegramConfigured:
+    "Токен бота и чат назначения настроены. Отправьте тест для проверки доставки.",
+  telegramNotConfigured: "Telegram пока не настроен.",
+  telegramTokenMissing:
+    "В свойствах скрипта Apps Script отсутствует токен бота.",
+  telegramChatMissing:
+    "В свойствах скрипта Apps Script отсутствует ID чата назначения.",
+  telegramSetupUnavailable:
+    "Обновите код Apps Script и его развёртывание, чтобы проверить настройку Telegram.",
+  telegramSetupInstructions: "Инструкция по настройке Telegram",
+  telegramSetupBot:
+    "Создайте или откройте своего бота через @BotFather в Telegram. Сохраните токен только в Apps Script → Настройки проекта → Свойства скрипта под именем TELEGRAM_TOKEN.",
+  telegramSetupChat:
+    "Начните диалог с ботом или добавьте его в группу кофейни и отправьте сообщение. Получите ID чата через функцию listWorkspaceTelegramChats в Apps Script, доступную только владельцу, и сохраните его как TELEGRAM_CHAT_ID.",
+  telegramSetupDeploy:
+    "Обновите существующее веб-развёртывание Apps Script до новой версии, синхронизируйте базу здесь и отправьте тест. Не вставляйте токен бота в приложение или переписку.",
+  telegramSetupOwnerOnly:
+    "Владелец настраивает бота и проверяет доставку. Данные доступа к боту в приложении не показываются.",
+  sendTelegramTest: "Отправить тестовое уведомление",
+  confirmTelegramTest:
+    "Отправить тестовое сообщение в настроенный чат Telegram? Количества товаров не изменятся.",
+  telegramTestSent: "Тестовое сообщение Telegram доставлено.",
+  telegramTestReady: "Тестовое сообщение Telegram готово к отправке.",
+  telegramTestFailed:
+    "Telegram отклонил тест. Проверьте настройки на сервере и повторите только тестовое уведомление.",
+  telegramTestUnknown:
+    "Доставка теста не подтверждена. Проверьте чат Telegram. Повторная отправка заблокирована во избежание дубля; можно проверить статус доставки.",
+  telegramTestMissing:
+    "Тест не отправлен: на сервере отсутствуют данные доступа к Telegram.",
+  retryTelegramTest: "Повторить только тестовое уведомление",
+  telegramTestRunning: "Отправляем тест Telegram…",
+  TELEGRAM_SETUP_NOT_AVAILABLE:
+    "Обновите код настройки Telegram в Apps Script и веб-развёртывание.",
+  TELEGRAM_NOT_CONFIGURED:
+    "Сохраните токен бота и ID чата только в свойствах скрипта Apps Script.",
+});
 export function translate(language, key, values = {}) {
   let value = dictionaries[language]?.[key] ?? en[key] ?? en.unknownError;
   if (typeof value === "object")

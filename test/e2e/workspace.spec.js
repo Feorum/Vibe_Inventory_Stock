@@ -15,7 +15,10 @@ const template = await readFile(
 
 // Only this in-memory fake database is mutated by these integration checks.
 // The real iframe transport, CSP, rendering, and browser storage are exercised.
-async function mockWorkspace(page) {
+async function mockWorkspace(
+  page,
+  { owner = true, telegramConfigured = true } = {},
+) {
   page.on("dialog", (dialog) => dialog.accept());
   const product = (id, ru, en, extra = {}) => ({
     id,
@@ -93,6 +96,18 @@ async function mockWorkspace(page) {
     countResponseLost: false,
     failLoad: false,
     heldCount: null,
+    telegram: {
+      configured: telegramConfigured,
+      tokenConfigured: telegramConfigured,
+      chatConfigured: telegramConfigured,
+      canTest: owner,
+      writesEnabled: true,
+    },
+    telegramTests: new Map(),
+    telegramTestSends: 0,
+    telegramTestUnknown: false,
+    telegramTestFail: false,
+    telegramTestResponseLost: false,
   };
   const snapshot = () =>
     structuredClone({
@@ -107,7 +122,11 @@ async function mockWorkspace(page) {
       cards: backend.cards,
       profile: backend.profile,
       reminders: { configured: true },
-      permissions: { write: true, manageReminders: true },
+      telegram: {
+        ...backend.telegram,
+        canTest: owner && backend.profile.email === email,
+      },
+      permissions: { write: true, manageReminders: owner },
     });
   await page.route("https://script.google.com/**", async (route) => {
     const channel = new URL(route.request().url()).searchParams.get("channel");
@@ -215,16 +234,77 @@ async function mockWorkspace(page) {
         return;
       }
     } else if (request.method === "workspaceStatus") {
-      data = backend.committed.has(body.id)
-        ? {
-            status: "COMMITTED",
-            result: {
-              ...backend.committed.get(body.id),
-              notification: backend.notifications.get(body.id),
-            },
-          }
-        : { status: "ABSENT" };
+      data = backend.telegramTests.has(body.id)
+        ? { status: "COMMITTED", result: backend.telegramTests.get(body.id) }
+        : backend.committed.has(body.id)
+          ? {
+              status: "COMMITTED",
+              result: {
+                ...backend.committed.get(body.id),
+                notification: backend.notifications.get(body.id),
+              },
+            }
+          : { status: "ABSENT" };
+    } else if (request.method === "workspaceTelegramTest") {
+      if (!owner || backend.profile.email !== email) {
+        await route.fulfill({ json: { ok: false, error: "OWNER_ONLY" } });
+        return;
+      }
+      let result = backend.telegramTests.get(body.id);
+      if (
+        !result ||
+        ["READY", "FAILED", "NOT_CONFIGURED"].includes(
+          result.notification.status,
+        )
+      ) {
+        const state = !backend.telegram.configured
+          ? "NOT_CONFIGURED"
+          : backend.telegramTestUnknown
+            ? "UNKNOWN"
+            : backend.telegramTestFail
+              ? "FAILED"
+              : "SENT";
+        result = {
+          id: body.id,
+          state: "COMMITTED",
+          notification: {
+            status: state,
+            language: body.language,
+            scope: "TEST",
+            delivered: state === "SENT" ? 1 : 0,
+            total: 1,
+          },
+        };
+        backend.telegramTests.set(body.id, structuredClone(result));
+        if (state === "SENT") backend.telegramTestSends++;
+      }
+      data = structuredClone(result);
+      if (backend.telegramTestResponseLost) {
+        backend.telegramTestResponseLost = false;
+        await route.fulfill({
+          json: { ok: false, error: "GOOGLE_REQUEST_FAILED" },
+        });
+        return;
+      }
     } else if (request.method === "workspaceNotify") {
+      if (backend.telegramTests.has(body.id)) {
+        if (!owner || backend.profile.email !== email) {
+          await route.fulfill({ json: { ok: false, error: "OWNER_ONLY" } });
+          return;
+        }
+        const result = backend.telegramTests.get(body.id);
+        if (!["SENT", "UNKNOWN"].includes(result.notification.status)) {
+          result.notification.status = backend.telegramTestUnknown
+            ? "UNKNOWN"
+            : backend.telegramTestFail
+              ? "FAILED"
+              : "SENT";
+          if (result.notification.status === "SENT")
+            backend.telegramTestSends++;
+        }
+        await route.fulfill({ json: { ok: true, data: result.notification } });
+        return;
+      }
       const current = backend.notifications.get(body.id) || {
         status: "NOT_CONFIGURED",
       };
@@ -341,6 +421,18 @@ async function send(page) {
     .click();
 }
 
+async function showCards(page) {
+  await page.getByRole("tab", { name: "Yellow Cards", exact: true }).click();
+}
+async function expandCardGroup(page, category) {
+  const group = page.locator(".card-group").filter({
+    has: page.getByRole("heading", { name: category, exact: true }),
+  });
+  if (!(await group.evaluate((element) => element.open)))
+    await group.locator(":scope > summary").click();
+  return group;
+}
+
 test("session-free drafts survive all filters, navigation, refresh, reload, and offline use", async ({
   page,
   context,
@@ -364,6 +456,8 @@ test("session-free drafts survive all filters, navigation, refresh, reload, and 
     "1,25",
   );
   await page.locator('[data-view="team"]').click();
+  await showCards(page);
+  await expandCardGroup(page, "A");
   await expect(page.getByText(/Existing A card/)).toBeVisible();
   await page.locator('[data-view="stock"]').click();
   backend.products[1].last = 8;
@@ -845,6 +939,7 @@ test("Team adds shared notes and schema-valid Yellow Cards, keeps failed fields,
   ).toBeVisible();
   expect(backend.notes[0].authorName).toBe("Test staff");
   expect(backend.notes[0].created).toBeTruthy();
+  await showCards(page);
   await page
     .getByRole("button", { name: "Add Yellow Card", exact: true })
     .click();
@@ -852,6 +947,7 @@ test("Team adds shared notes and schema-valid Yellow Cards, keeps failed fields,
   await form.locator('[name="cardName"]').fill("New A card");
   await form.locator('[name="cardCategory"]').fill("A");
   await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator("#message")).toHaveText("Yellow Card saved.");
   await expect(page.getByText(/New A card/)).toBeVisible();
   for (const section of ["A", "C", "D"])
     await expect(
@@ -933,4 +1029,419 @@ test("status actions support Undo and directional swipes without treating quanti
   await expect(
     card(page, "P003").getByText("Inactive", { exact: true }),
   ).toBeVisible();
+});
+
+test("compact stock filters remain reachable while scrolling and the sync control keeps a touch-sized compact target", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  const original = structuredClone(backend.products[0]);
+  backend.products.push(
+    ...Array.from({ length: 72 }, (_, index) => ({
+      ...original,
+      id: `PX${index + 1}`,
+      ru: `Товар ${index + 1}`,
+      en: `Scrollable product ${index + 1}`,
+    })),
+  );
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "6,25", "0");
+  const originalWidth = page.viewportSize().width;
+  for (const width of new Set([320, originalWidth])) {
+    await page.setViewportSize({ width, height: 740 });
+    await page.evaluate(() => window.scrollTo(0, 2200));
+    const toolbar = page.locator(".stock-filters");
+    await expect(toolbar).toBeVisible();
+    if (width === 320) {
+      const toolbarSize = await toolbar.boundingBox();
+      const searchSize = await page
+        .getByLabel("Search products", { exact: true })
+        .boundingBox();
+      const locationSize = await page
+        .getByRole("combobox", { name: "Location", exact: true })
+        .boundingBox();
+      expect(toolbarSize.height).toBeLessThan(180);
+      expect(searchSize.y).toBeLessThan(locationSize.y);
+    }
+    await expect
+      .poll(async () => {
+        const header = await page.locator("header").boundingBox();
+        const filter = await toolbar.boundingBox();
+        return Boolean(
+          filter &&
+          filter.y >= header.y + header.height - 2 &&
+          filter.y + filter.height < 740,
+        );
+      })
+      .toBe(true);
+    for (const field of [
+      page.getByLabel("Search products", { exact: true }),
+      page.getByRole("combobox", { name: "Location", exact: true }),
+      page.getByRole("combobox", { name: "Category", exact: true }),
+    ]) {
+      const bounds = await field.boundingBox();
+      expect(bounds.y).toBeGreaterThanOrEqual(0);
+      expect(bounds.y + bounds.height).toBeLessThan(740);
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
+    }
+    const sync = await page.locator("#synchronize-quantity").boundingBox();
+    expect(sync.height).toBeGreaterThanOrEqual(44);
+    expect(sync.height).toBeLessThan(75);
+    expect(sync.width).toBeLessThan(width * 0.9);
+    expect(sync.y + sync.height).toBeLessThanOrEqual(740);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.getByLabel("Search products", { exact: true }).fill("milk");
+  await page
+    .getByRole("combobox", { name: "Location", exact: true })
+    .selectOption("fridge");
+  await page
+    .getByRole("combobox", { name: "Category", exact: true })
+    .selectOption("Dairy");
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "6,25",
+  );
+  await page
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await expect(card(page, "P001")).toBeVisible();
+  const cardSize = await card(page, "P001").boundingBox();
+  expect(cardSize.height).toBeLessThan(350);
+  expect(cardSize.width).toBeLessThanOrEqual(320);
+  await page.screenshot({
+    path: test.info().outputPath("stock-compact-320.png"),
+  });
+  await page.evaluate(() => (document.documentElement.style.zoom = "2"));
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(backend.saves).toBe(0);
+});
+
+test("Team separates notes from compact searchable category groups and preserves collapse choices", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 320, height: 740 });
+  backend.notes = [
+    {
+      id: "note-1",
+      text: "This shared note must stay separate",
+      created: "2026-10-31T10:00:00Z",
+      authorName: "Test author",
+    },
+  ];
+  backend.cards[0].size = "250 ml";
+  backend.cards[0].note = "Need oat-safe packaging";
+  backend.cards.push({
+    id: "A2",
+    name: "Second A row",
+    category: "A",
+    size: "350 ml",
+    note: "",
+    authorName: "Test staff",
+  });
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="team"]').click();
+  await expect(
+    page.getByRole("tab", { name: "Shared notes", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByText("This shared note must stay separate", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("searchbox", { name: "Search cards", exact: true }),
+  ).toHaveCount(0);
+  await showCards(page);
+  await page.getByRole("tab", { name: "Yellow Cards", exact: true }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(
+    page.getByRole("tab", { name: "Shared notes", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    page.getByRole("tab", { name: "Yellow Cards", exact: true }),
+  ).toBeFocused();
+  await expect(
+    page.getByText("This shared note must stay separate", { exact: true }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Add note", exact: true }),
+  ).toHaveCount(0);
+  const groupA = await expandCardGroup(page, "A");
+  await expect(groupA.locator(".yellow-card-row")).toHaveCount(2);
+  await page.screenshot({ path: test.info().outputPath("team-cards-320.png") });
+  for (const summary of await groupA.locator(".yellow-card-summary").all()) {
+    const bounds = await summary.boundingBox();
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.height).toBeLessThan(85);
+  }
+  await groupA.locator(":scope > summary").click();
+  await expect(groupA).not.toHaveAttribute("open", "");
+  const search = page.getByRole("searchbox", {
+    name: "Search cards",
+    exact: true,
+  });
+  await search.fill("oat-safe");
+  await expect(page.locator(".yellow-card-row")).toHaveCount(1);
+  await expect(
+    page.getByText("Existing A card", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator(".card-group")
+      .filter({ has: page.getByRole("heading", { name: "A", exact: true }) }),
+  ).toHaveAttribute("open", "");
+  await search.fill("C2");
+  await expect(page.locator(".yellow-card-row")).toHaveCount(1);
+  await expect(
+    page.getByText("Existing C card", { exact: true }),
+  ).toBeVisible();
+  await search.fill("350 ml");
+  await expect(page.getByText("Second A row", { exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Clear card search", exact: true })
+    .click();
+  const restoredA = page
+    .locator(".card-group")
+    .filter({ has: page.getByRole("heading", { name: "A", exact: true }) });
+  await expect(restoredA).not.toHaveAttribute("open", "");
+  await search.fill("no such card");
+  await expect(page.locator(".yellow-card-row")).toHaveCount(0);
+  await expect(
+    page.getByText(/No.*cards.*match|No matching.*cards/i),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Shared notes", exact: true }).click();
+  await expect(
+    page.getByText("This shared note must stay separate", { exact: true }),
+  ).toBeVisible();
+  await showCards(page);
+  await expect(
+    page.getByRole("searchbox", { name: "Search cards", exact: true }),
+  ).toHaveValue("no such card");
+  await page
+    .getByRole("button", { name: "Clear card search", exact: true })
+    .click();
+  await page.setViewportSize({ width: 320, height: 740 });
+  const report = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(
+    report.violations.map((v) => ({
+      id: v.id,
+      targets: v.nodes.map((n) => n.target),
+    })),
+  ).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("Tips are off by default, persist per account and workbook, and never discard counting drafts", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await expect(page.locator("[data-tip]:visible")).toHaveCount(0);
+  await enterMilk(page, "3,75", "0");
+  await page.locator('[data-view="profile"]').click();
+  const tips = page.getByRole("checkbox", { name: "Tips", exact: true });
+  await expect(tips).not.toBeChecked();
+  await tips.check();
+  await expect(page.locator("[data-tip]:visible").first()).toBeVisible();
+  await page.locator('[data-view="stock"]').click();
+  await expect(page.locator("[data-tip]:visible").first()).toBeVisible();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "3,75",
+  );
+  await page
+    .getByRole("button", { name: "Synchronize database", exact: true })
+    .click();
+  await page.reload();
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await expect(
+    page.getByRole("checkbox", { name: "Tips", exact: true }),
+  ).toBeChecked();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
+  await login(page, "other@example.test");
+  await page.locator('[data-view="profile"]').click();
+  await expect(
+    page.getByRole("checkbox", { name: "Tips", exact: true }),
+  ).not.toBeChecked();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
+  backend.databaseId = "another-tips-database";
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await expect(
+    page.getByRole("checkbox", { name: "Tips", exact: true }),
+  ).not.toBeChecked();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
+  backend.databaseId = "safe-workspace-test-database";
+  await login(page);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "3,75",
+  );
+  await page.locator('[data-view="profile"]').click();
+  await expect(
+    page.getByRole("checkbox", { name: "Tips", exact: true }),
+  ).toBeChecked();
+  await page.getByRole("checkbox", { name: "Tips", exact: true }).uncheck();
+  await page.locator('[data-view="stock"]').click();
+  await expect(page.locator("[data-tip]:visible")).toHaveCount(0);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "3,75",
+  );
+  expect(backend.saves).toBe(0);
+});
+
+test("owner Telegram setup exposes no credentials and test retry cannot repeat a stock save", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.telegramTestFail = true;
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "8,5", "0");
+  await page.locator('[data-view="profile"]').click();
+  const panel = page.locator("#telegram-settings");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('input[type="password"]')).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Send test notification", exact: true })
+    .click();
+  await expect.poll(() => backend.telegramTests.size).toBe(1);
+  await expect(page.locator("#telegram-test-retry")).toBeVisible();
+  expect(backend.saves).toBe(0);
+  expect(backend.notifications.size).toBe(0);
+  backend.telegramTestFail = false;
+  await page
+    .getByRole("button", { name: "Retry test notification only", exact: true })
+    .click();
+  await expect.poll(() => backend.telegramTestSends).toBe(1);
+  const first = backend.requests.find(
+    (r) => r.method === "workspaceTelegramTest",
+  );
+  const retry = backend.requests.find((r) => r.method === "workspaceNotify");
+  expect(retry.body.id).toBe(first.body.id);
+  await page.locator('[data-view="stock"]').click();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "8,5",
+  );
+  expect(
+    backend.requests.filter((r) => r.method === "workspaceCount"),
+  ).toHaveLength(0);
+  const storage = await page.evaluate(() => JSON.stringify(localStorage));
+  expect(storage).not.toContain(password);
+  expect(storage).not.toContain("workspace-memory-token");
+});
+
+test("missing Telegram setup and staff permissions cannot send a test message", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page, {
+    owner: false,
+    telegramConfigured: false,
+  });
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  const panel = page.locator("#telegram-settings");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(/not configured|missing|owner/i);
+  await expect(
+    page.getByRole("button", { name: "Send test notification", exact: true }),
+  ).toHaveCount(0);
+  await expect(panel.locator('input[type="password"]')).toHaveCount(0);
+  expect(backend.telegramTestSends).toBe(0);
+  expect(
+    backend.requests.filter((r) => r.method === "workspaceTelegramTest"),
+  ).toHaveLength(0);
+});
+
+test("an owner with missing Telegram properties sees setup guidance but cannot send a bot test", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page, { telegramConfigured: false });
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  const panel = page.locator("#telegram-settings");
+  await expect(panel).toContainText("TELEGRAM_TOKEN");
+  await expect(panel).toContainText("TELEGRAM_CHAT_ID");
+  await expect(
+    page.getByRole("button", { name: "Send test notification", exact: true }),
+  ).toBeDisabled();
+  await expect(panel.locator("input")).toHaveCount(0);
+  expect(backend.telegramTestSends).toBe(0);
+});
+
+test("an unconfirmed Telegram test reply is checked without resending the bot message", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.telegramTestUnknown = true;
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .getByRole("button", { name: "Send test notification", exact: true })
+    .click();
+  await expect.poll(() => backend.telegramTests.size).toBe(1);
+  await expect(page.locator("#telegram-test-check")).toBeVisible();
+  const [id, result] = [...backend.telegramTests.entries()][0];
+  result.notification.status = "SENT";
+  backend.telegramTests.set(id, result);
+  await page
+    .getByRole("button", { name: "Check delivery status", exact: true })
+    .click();
+  await expect(page.locator("#telegram-test-check")).toHaveCount(0);
+  expect(backend.telegramTestSends).toBe(0);
+  expect(
+    backend.requests.filter((r) => r.method === "workspaceTelegramTest"),
+  ).toHaveLength(1);
+  expect(
+    backend.requests.filter((r) => r.method === "workspaceNotify"),
+  ).toHaveLength(0);
+  expect(backend.saves).toBe(0);
+});
+
+test("a lost Telegram test response resumes its original request without delivering a duplicate message", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.telegramTestResponseLost = true;
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .getByRole("button", { name: "Send test notification", exact: true })
+    .click();
+  await expect.poll(() => backend.telegramTestSends).toBe(1);
+  await expect(
+    page.getByRole("button", { name: "Retry safely", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Retry safely", exact: true }).click();
+  await expect(page.locator("#telegram-settings")).toContainText(
+    "Telegram test message delivered.",
+  );
+  const requests = backend.requests.filter(
+    (request) => request.method === "workspaceTelegramTest",
+  );
+  expect(requests).toHaveLength(2);
+  expect(new Set(requests.map((request) => request.body.id)).size).toBe(1);
+  expect(backend.telegramTestSends).toBe(1);
+  expect(backend.saves).toBe(0);
 });

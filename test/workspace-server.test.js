@@ -918,3 +918,49 @@ test("zone sums carry exactly without arbitrary precision runtime support", () =
   assert.equal(result.failed[0].error, "INVALID_QUANTITY");
   assert.equal(db.load().products[0].last, 1000000000);
 });
+
+test("workspace bootstrap exposes Telegram presence and permissions, never credentials", () => {
+  const db = database();
+  db.properties.set(
+    "TELEGRAM_TOKEN",
+    "private-integration-token-not-for-browser",
+  );
+  db.properties.set("TELEGRAM_CHAT_ID", "-100987654321");
+  const owner = db.call("workspaceLoad", {}, "owner");
+  assert.equal(owner.telegram.configured, true);
+  assert.equal(owner.telegram.canTest, true);
+  assert.equal(db.load().telegram.canTest, false);
+  for (const secret of [
+    "private-integration-token-not-for-browser",
+    "-100987654321",
+  ])
+    assert.equal(JSON.stringify(owner).includes(secret), false);
+});
+
+test("Telegram test dispatch is owner-only, read-only-gated, replayable and isolated from stock", () => {
+  const db = database();
+  const request = { id: randomUUID(), language: "ru" };
+  const beforeProducts = copy(db.sheets.get("Products").values);
+  const beforeEvents = copy(db.sheets.get("Events").values);
+  assert.throws(() => db.call("workspaceTelegramTest", request), /OWNER_ONLY/);
+  const result = db.call("workspaceTelegramTest", request, "owner");
+  assert.equal(result.state, "COMMITTED");
+  assert.equal(result.notification.status, "NOT_CONFIGURED");
+  assert.deepEqual(db.call("workspaceTelegramTest", request, "owner"), result);
+  assert.equal(
+    db.call("workspaceStatus", { id: request.id }, "owner").status,
+    "COMMITTED",
+  );
+  assert.deepEqual(db.sheets.get("Products").values, beforeProducts);
+  assert.deepEqual(db.sheets.get("Events").values, beforeEvents);
+  db.properties.set("PWA_WRITES_ENABLED", "false");
+  assert.throws(
+    () =>
+      db.call(
+        "workspaceTelegramTest",
+        { ...request, id: randomUUID() },
+        "owner",
+      ),
+    /PWA_READ_ONLY/,
+  );
+});

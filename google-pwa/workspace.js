@@ -45,6 +45,8 @@ let generation = 0,
   snapshotEpoch = 0,
   loginOpen = false;
 const notifying = new Set();
+const teamViews = new Map();
+let layoutObserver;
 const filters = {
   stock: { search: "", zone: "", category: "" },
   catalog: { search: "", zone: "", category: "" },
@@ -56,6 +58,24 @@ const make = (tag, value, className) => {
   if (className) el.className = className;
   return el;
 };
+const tipsEnabled = () => record.preferences?.tips === true;
+function tip(key, className = "help") {
+  const element = make("p", t(key), className);
+  element.dataset.tip = "true";
+  element.hidden = !tipsEnabled();
+  return element;
+}
+function applyTips() {
+  document.body.classList.toggle("tips-enabled", tipsEnabled());
+  for (const element of document.querySelectorAll("[data-tip]"))
+    element.hidden = !tipsEnabled();
+}
+function teamView() {
+  const key = recordKey();
+  if (!teamViews.has(key))
+    teamViews.set(key, { tab: "notes", search: "", groups: {}, rows: {} });
+  return teamViews.get(key);
+}
 const button = (label, fn, className) => {
   const el = make("button", label, className);
   el.type = "button";
@@ -190,6 +210,8 @@ async function rpc(method, body = {}) {
 function bindText(root = document) {
   for (const el of root.querySelectorAll("[data-i18n]"))
     el.textContent = t(el.dataset.i18n);
+  for (const el of root.querySelectorAll("[data-i18n-label]"))
+    el.setAttribute("aria-label", t(el.dataset.i18nLabel));
 }
 function languageSelect(id) {
   const label = make("label", t("language"));
@@ -229,6 +251,10 @@ function setLanguage(value) {
 
 document.body.innerHTML = `<a class="skip" href="#main" data-i18n="skip"></a><header><strong class="brand">VARKA</strong><span id="connection-badge"></span><button id="online-login" type="button" data-i18n="signInAgain" hidden></button><button id="refresh" type="button" data-i18n="refresh" hidden></button></header><main id="main"><p id="message" role="status" aria-live="polite" tabindex="-1"></p><section id="connect-panel" class="panel"><h1 data-i18n="loginTitle"></h1><p class="help" data-i18n="loginHelp"></p><form id="connect-form" class="form-grid"><label><span data-i18n="username"></span><input id="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label><label><span data-i18n="password"></span><input id="password" type="password" required autocomplete="current-password" maxlength="200"></label><label><span data-i18n="endpoint"></span><input id="endpoint" type="url" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label><div id="login-language-wrap"></div><button id="sign-in" class="primary" data-i18n="signIn"></button></form><p class="help" data-i18n="privacy"></p><button id="restore-offline" type="button" data-i18n="restoreOffline" hidden></button><p id="cache-identity" class="help" hidden></p></section><section id="workspace" hidden><h1 id="view-heading" tabindex="-1"></h1><div id="pending-panel" class="panel" hidden><h2 data-i18n="pending"></h2><p data-i18n="pendingHelp"></p><button id="retry" type="button" data-i18n="retry"></button></div><div id="notification-panel" class="panel" hidden></div><div id="page-content"></div><div id="undo-panel" hidden></div></section></main><div id="count-bar" class="count-bar" hidden><div><span class="help" data-i18n="draftNotice"></span><button id="synchronize-quantity" type="button" class="primary" data-i18n="syncQuantity"></button></div></div><nav id="navigation" aria-label="VARKA" hidden></nav><footer data-i18n="version"></footer><dialog id="workspace-dialog"><form id="dialog-form" class="form-grid" novalidate></form></dialog>`;
 $("#login-language-wrap").append(languageSelect("login-language"));
+$("#count-bar").classList.add("compact-count-bar");
+$("#count-bar [data-i18n=draftNotice]").dataset.tip = "true";
+$("#synchronize-quantity").dataset.i18n = "syncQuantityCompact";
+$("#synchronize-quantity").dataset.i18nLabel = "syncQuantity";
 $("#main").tabIndex = -1;
 $("#connect-form").noValidate = true;
 $("#username").value = config.username || "";
@@ -282,6 +308,7 @@ $("#workspace-dialog").addEventListener("keydown", (event) => {
 });
 
 function controls() {
+  applyTips();
   const has = Boolean(record.snapshot);
   $("#workspace").hidden = !has;
   $("#connect-panel").hidden = has && !loginOpen;
@@ -314,6 +341,25 @@ function controls() {
       mutating ||
       Boolean(record.pendingMutation) ||
       Boolean(record.pending);
+  for (const el of document.querySelectorAll("[data-telegram-action]")) {
+    const status = record.snapshot?.telegram;
+    const latest = record.telegramTests?.[record.telegramTestId];
+    const checking = el.dataset.telegramAction === "check";
+    const testBusy = latest && notifying.has(`telegram-test:${latest.id}`);
+    if (checking) {
+      el.disabled =
+        !authenticated || !navigator.onLine || !status?.canTest || testBusy;
+    } else {
+      el.disabled ||=
+        !status?.canTest ||
+        !status?.configured ||
+        status.writesEnabled === false ||
+        testBusy ||
+        (el.dataset.telegramAction === "new" &&
+          latest &&
+          latest.status !== "SENT");
+    }
+  }
   const cache = enteredCache(),
     validCache =
       cache.saved?.snapshot &&
@@ -439,7 +485,7 @@ async function restoreOffline() {
   authenticated = false;
   page = "stock";
   loginOpen = false;
-  flash("draftNotice");
+  flash("savedInventoryOpened");
   render();
 }
 async function refresh() {
@@ -498,11 +544,17 @@ function render() {
   else renderProfile(root);
   renderNotification();
   controls();
+  observeLayout();
 }
 function renderProducts(root) {
   const current = filters[page],
     all = record.snapshot.products || [];
-  const filter = make("section", undefined, "panel filters");
+  const filter = make(
+    "section",
+    undefined,
+    `panel filters workspace-filters${page === "stock" ? " stock-filters" : ""}`,
+  );
+  filter.id = "workspace-filters";
   const searchLabel = make("label", t("search")),
     search = make("input");
   search.type = "search";
@@ -560,7 +612,7 @@ function renderProducts(root) {
   } else {
     actions.append(button(t("clear"), clearDrafts));
     actions.append(button(t("backup"), downloadBackup));
-    root.append(make("p", t("countHelp"), "help"));
+    root.append(tip("countHelp"));
   }
   root.append(actions);
   const result = make("p", undefined, "help");
@@ -650,15 +702,25 @@ function productCard(p, conflicted) {
     ),
   );
   if (page === "stock") {
-    const recorded = make("div", undefined, "recorded");
-    recorded.append(
-      make("span", t("recorded")),
+    const recorded = make("div", undefined, "recorded recorded-compact");
+    const recordedValue = make("span", undefined, "recorded-value");
+    recordedValue.setAttribute("aria-label", t("recorded"));
+    recordedValue.append(
+      make("span", t("recordedShort")),
       make(
         "strong",
         `${quantityText(p.last)}${p.last === null || p.last === undefined ? "" : ` ${t(p.unit) || p.unit}`}`,
       ),
-      make("span", `${t("countedAt")}: ${dateText(p.lastCountedAt)}`),
     );
+    const counted = make(
+      "time",
+      `${t("countedAtShort")}: ${dateText(p.lastCountedAt)}`,
+      "recorded-time",
+    );
+    counted.title = `${t("countedAt")}: ${dateText(p.lastCountedAt)}`;
+    counted.setAttribute("aria-label", counted.title);
+    if (p.lastCountedAt) counted.dateTime = p.lastCountedAt;
+    recorded.append(recordedValue, counted);
     card.append(recorded);
     const inputs = make("div", undefined, "quantity-grid"),
       d = record.drafts[p.id];
@@ -709,7 +771,9 @@ function productCard(p, conflicted) {
       );
       flags.append(label);
     }
-    card.append(flags);
+    const footer = make("div", undefined, "product-footer");
+    footer.append(flags);
+    card.append(footer);
   } else
     card.append(
       make("p", `${p.category || ""} · ${t(p.unit) || p.unit}`, "help"),
@@ -734,7 +798,7 @@ function productCard(p, conflicted) {
       actions.append(b);
     }
   }
-  card.append(actions);
+  (card.querySelector(".product-footer") || card).append(actions);
   let start;
   card.addEventListener("pointerdown", (event) => {
     if (
@@ -933,7 +997,7 @@ function confirmSubmission() {
         label.append(input, make("span", t(key)));
         scopes.append(label);
       }
-      root.append(scopes, make("p", t("scopeHelp"), "help"));
+      root.append(scopes, tip("scopeHelp"));
       return { scopes };
     },
     async ({ scopes }) => {
@@ -1180,15 +1244,25 @@ async function sendMutation() {
       )
     )
       throw Error("Connection interrupted");
-    record.pendingMutation = null;
-    persist();
+    const candidate = structuredClone(record);
+    candidate.pendingMutation = null;
+    if (request.method === "workspaceTelegramTest") {
+      candidate.telegramTests ||= {};
+      candidate.telegramTests[request.body.id] = {
+        ...result.notification,
+        id: request.body.id,
+      };
+      candidate.telegramTestId = request.body.id;
+    }
+    persist(candidate);
+    record = candidate;
     snapshotEpoch++;
     return result;
   } catch (error) {
     if (epoch !== generation || key !== recordKey())
       throw Error("STALE_OPERATION");
     const rejected =
-      /^(INVALID_|EXISTING_CATEGORY_REQUIRED|UNIT_HAS_HISTORY|PRODUCT_NAME_EXISTS|PRODUCT_DELETED|CATALOG_CONFLICT$|CONFLICT$|CARD_EXISTS|OWNER_ONLY|PWA_READ_ONLY|SIGN_IN_REQUIRED)/.test(
+      /^(INVALID_|EXISTING_CATEGORY_REQUIRED|UNIT_HAS_HISTORY|PRODUCT_NAME_EXISTS|PRODUCT_DELETED|CATALOG_CONFLICT$|CONFLICT$|CARD_EXISTS|OWNER_ONLY|PWA_READ_ONLY|SIGN_IN_REQUIRED|METHOD_NOT_ALLOWED|TELEGRAM_SETUP_NOT_AVAILABLE)/.test(
         String(error.message),
       );
     if (rejected) {
@@ -1303,7 +1377,7 @@ function catalogForm(p) {
       };
       values.reminder.addEventListener("change", reminderControls);
       reminderControls();
-      root.append(make("p", t("reminderHelp"), "help"));
+      root.append(tip("reminderHelp"));
       const label = make("label", undefined, "check");
       values.active = make("input");
       values.active.type = "checkbox";
@@ -1364,8 +1438,55 @@ async function deleteProduct(p) {
   flash("productDeleted");
 }
 function renderTeam(root) {
-  const notes = make("section", undefined, "panel");
-  notes.append(make("h2", t("notes")));
+  const state = teamView();
+  const tabs = make("div", undefined, "team-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", t("teamSections"));
+  const sections = [
+    ["notes", "notes"],
+    ["cards", "yellowCards"],
+  ];
+  const switchTab = (id) => {
+    state.tab = id;
+    render();
+    $(`#team-tab-${id}`).focus({ preventScroll: true });
+  };
+  for (const [id, label] of sections) {
+    const control = button(t(label), () => switchTab(id));
+    control.id = `team-tab-${id}`;
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-controls", `team-${id}-panel`);
+    control.setAttribute("aria-selected", String(state.tab === id));
+    control.tabIndex = state.tab === id ? 0 : -1;
+    control.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+        return;
+      event.preventDefault();
+      const target =
+        event.key === "Home"
+          ? "notes"
+          : event.key === "End"
+            ? "cards"
+            : id === "notes"
+              ? "cards"
+              : "notes";
+      switchTab(target);
+    });
+    tabs.append(control);
+  }
+  root.append(tabs);
+  const panel = (id, title) => {
+    const element = make("section", undefined, "panel team-panel");
+    element.id = `team-${id}-panel`;
+    element.setAttribute("role", "tabpanel");
+    element.setAttribute("aria-labelledby", `team-tab-${id}`);
+    element.tabIndex = 0;
+    element.hidden = state.tab !== id;
+    element.append(make("h2", t(title)));
+    root.append(element);
+    return element;
+  };
+  const notes = panel("notes", "notes");
   const add = button(t("addNote"), () =>
     modal(
       "addNote",
@@ -1397,32 +1518,127 @@ function renderTeam(root) {
     );
     notes.append(note);
   }
-  root.append(notes);
-  const cards = make("section", undefined, "panel");
-  cards.append(make("h2", t("yellowCards")));
+  const cards = panel("cards", "yellowCards");
+  const searchLabel = make("label", t("searchCards"), "card-search");
+  const search = make("input");
+  search.type = "search";
+  search.id = "card-search";
+  search.value = state.search;
+  searchLabel.append(search);
+  cards.append(searchLabel);
+  const cardActions = make("div", undefined, "actions card-actions");
   const addCard = button(t("addCard"), cardForm);
   addCard.dataset.serverAction = "true";
-  cards.append(addCard);
-  for (const section of ["A", "C", "D", "otherCards"]) {
-    cards.append(make("h3", section === "otherCards" ? t(section) : section));
-    const list = (record.snapshot.cards || []).filter((c) => {
-      const prefix = String(c.id || c.code || "")
-        .toUpperCase()
-        .slice(0, 1);
-      return section === "otherCards"
-        ? !["A", "C", "D"].includes(prefix)
-        : prefix === section;
+  const clear = button(t("clearCardSearch"), () => {
+    state.search = "";
+    search.value = "";
+    listCards();
+    search.focus();
+  });
+  cardActions.append(addCard, clear);
+  cards.append(cardActions);
+  const result = make("p", undefined, "help card-search-result");
+  result.setAttribute("role", "status");
+  cards.append(result);
+  const groups = make("div", undefined, "card-groups");
+  cards.append(groups);
+  const normalize = (value) =>
+    String(value || "")
+      .toLocaleLowerCase()
+      .replace(/ё/g, "е");
+  function listCards() {
+    const all = record.snapshot.cards || [],
+      query = normalize(state.search.trim());
+    const visible = all.filter(
+      (c) =>
+        !query ||
+        [c.id, c.code, c.name, c.size, c.category, c.note].some((value) =>
+          normalize(value).includes(query),
+        ),
+    );
+    result.textContent = t("cardsSearchResult", {
+      shown: visible.length,
+      total: all.length,
     });
-    if (!list.length) cards.append(make("p", t("noCards"), "help"));
-    for (const c of list) {
-      const card = make("article", undefined, "note");
-      card.append(make("strong", c.id || c.code), make("p", c.name));
-      for (const value of [c.size, c.category, c.note])
-        if (value) card.append(make("p", value));
-      cards.append(card);
+    clear.disabled = !state.search;
+    groups.replaceChildren();
+    if (query && !visible.length) {
+      groups.append(make("p", t("noMatchingCards"), "help"));
+      return;
+    }
+    const categories = [
+      "A",
+      "C",
+      "D",
+      ...new Set(
+        all
+          .map(cardCategory)
+          .filter((category) => !["A", "C", "D"].includes(category)),
+      ),
+    ];
+    for (const category of categories) {
+      const entries = visible.filter((c) => cardCategory(c) === category);
+      if (query && !entries.length) continue;
+      const group = make("details", undefined, "card-group");
+      group.dataset.category = category;
+      group.open = Boolean(query) || state.groups[category] === true;
+      const summary = make("summary", undefined, "card-group-summary");
+      summary.append(
+        make("h3", category === "__other__" ? t("otherCards") : category),
+        make("span", String(entries.length), "card-group-count"),
+      );
+      summary.addEventListener("click", () => {
+        if (!query) state.groups[category] = !group.open;
+      });
+      group.append(summary);
+      if (!entries.length) group.append(make("p", t("noCards"), "help"));
+      for (const c of entries) group.append(yellowCardRow(c, state));
+      groups.append(group);
     }
   }
-  root.append(cards);
+  search.addEventListener("input", () => {
+    state.search = search.value;
+    listCards();
+  });
+  listCards();
+}
+function cardCategory(card) {
+  const category = String(card.category || "").trim();
+  if (category) return category;
+  const prefix = String(card.id || card.code || "")
+    .toUpperCase()
+    .slice(0, 1);
+  return ["A", "C", "D"].includes(prefix) ? prefix : "__other__";
+}
+function yellowCardRow(card, state) {
+  const id = String(card.id || card.code || ""),
+    row = make("details", undefined, "yellow-card-row");
+  row.dataset.cardId = id;
+  row.open = state.rows[id] === true;
+  const summary = make("summary", undefined, "yellow-card-summary");
+  summary.append(
+    make("strong", id, "card-code"),
+    make("span", card.name, "card-name"),
+  );
+  if (card.size) summary.append(make("span", card.size, "card-meta"));
+  summary.addEventListener("click", () => {
+    state.rows[id] = !row.open;
+  });
+  const details = make("div", undefined, "yellow-card-details");
+  for (const [key, value] of [
+    ["cardCategory", card.category],
+    ["size", card.size],
+    ["cardNote", card.note],
+  ]) {
+    if (value) details.append(make("p", `${t(key)}: ${value}`));
+  }
+  if (card.authorName || card.by)
+    details.append(
+      make("p", `${t("author")}: ${card.authorName || card.by}`, "help"),
+    );
+  if (card.updated) details.append(make("p", dateText(card.updated), "help"));
+  row.append(summary, details);
+  return row;
 }
 function cardForm() {
   modal(
@@ -1443,6 +1659,10 @@ function cardForm() {
         category: v.category.value,
         note: v.note.value,
       });
+      const state = teamView();
+      state.tab = "cards";
+      state.search = "";
+      state.groups[v.category.value.trim()] = true;
       await completeMutation("cardSaved");
     },
   );
@@ -1455,6 +1675,25 @@ function renderProfile(root) {
     make("p", `${t("email")}: ${profile.email || config.username}`),
     languageSelect("profile-language"),
   );
+  const tipsLabel = make("label", undefined, "check tips-mode-control");
+  const tips = make("input");
+  tips.type = "checkbox";
+  tips.id = "tips-mode";
+  tips.checked = tipsEnabled();
+  tips.addEventListener("change", () =>
+    guard(() => {
+      const candidate = structuredClone(record);
+      candidate.preferences = {
+        ...(candidate.preferences || {}),
+        tips: tips.checked,
+      };
+      persist(candidate);
+      record = candidate;
+      applyTips();
+    }),
+  );
+  tipsLabel.append(tips, make("span", t("tipsMode")));
+  panel.append(tipsLabel, tip("tipsModeHelp"));
   panel.append(
     make(
       "p",
@@ -1465,15 +1704,16 @@ function renderProfile(root) {
       ),
       "help",
     ),
-    make("p", t("reminderHelp"), "help"),
+    tip("reminderHelp"),
     make("p", `${t("lastSync")}: ${dateText(record.loadedAt)}`, "help"),
-    make("p", t("logoutHelp"), "help"),
+    tip("logoutHelp"),
   );
   panel.append(
     button(t("backup"), downloadBackup),
     button(t("logout"), logout),
   );
   root.append(panel);
+  renderTelegramSettings(root);
   const old = read(`varka-google:${config.endpoint}:${config.username}`);
   if (
     old &&
@@ -1484,6 +1724,138 @@ function renderProfile(root) {
     link.href = "./legacy.html";
     legacy.append(make("p", t("legacy")), link);
     root.append(legacy);
+  }
+}
+function renderTelegramSettings(root) {
+  const panel = make("section", undefined, "panel telegram-settings");
+  panel.id = "telegram-settings";
+  const heading = make("h2", t("telegramSettings"));
+  heading.id = "telegram-heading";
+  panel.setAttribute("aria-labelledby", heading.id);
+  panel.append(heading);
+  root.append(panel);
+  const status = record.snapshot.telegram;
+  if (!status) {
+    panel.append(make("p", t("telegramSetupUnavailable")));
+    return;
+  }
+  panel.append(
+    make(
+      "p",
+      t(status.configured ? "telegramConfigured" : "telegramNotConfigured"),
+    ),
+  );
+  if (!status.tokenConfigured)
+    panel.append(make("p", t("telegramTokenMissing"), "error"));
+  if (!status.chatConfigured)
+    panel.append(make("p", t("telegramChatMissing"), "error"));
+  if (!status.canTest) {
+    panel.append(make("p", t("telegramSetupOwnerOnly")));
+    return;
+  }
+  const instructions = make("details", undefined, "telegram-setup-guide");
+  instructions.append(make("summary", t("telegramSetupInstructions")));
+  const steps = make("ol");
+  for (const key of [
+    "telegramSetupBot",
+    "telegramSetupChat",
+    "telegramSetupDeploy",
+  ])
+    steps.append(make("li", t(key)));
+  instructions.append(steps);
+  panel.append(instructions);
+  const latest = record.telegramTests?.[record.telegramTestId];
+  if (latest) {
+    const key =
+      {
+        READY: "telegramTestReady",
+        SENT: "telegramTestSent",
+        FAILED: "telegramTestFailed",
+        UNKNOWN: "telegramTestUnknown",
+        NOT_CONFIGURED: "telegramTestMissing",
+      }[latest.status] || "telegramTestUnknown";
+    const result = make("p", t(key));
+    result.setAttribute("role", "status");
+    panel.append(result);
+    if (
+      ["READY", "FAILED", "UNKNOWN", "NOT_CONFIGURED"].includes(latest.status)
+    ) {
+      const checkOnly = latest.status === "UNKNOWN";
+      const retry = button(
+        t(checkOnly ? "checkDelivery" : "retryTelegramTest"),
+        () => retryTelegramTest(latest.id, checkOnly),
+      );
+      retry.id = checkOnly ? "telegram-test-check" : "telegram-test-retry";
+      retry.dataset.serverAction = "true";
+      retry.dataset.telegramAction = checkOnly ? "check" : "send";
+      panel.append(retry);
+    }
+  }
+  const test = button(t("sendTelegramTest"), async () => {
+    if (!confirm(t("confirmTelegramTest"))) return;
+    const epoch = generation;
+    flash("telegramTestRunning");
+    await mutation("workspaceTelegramTest", { language });
+    if (epoch === generation && page === "profile") render();
+  });
+  test.id = "telegram-test";
+  test.dataset.serverAction = "true";
+  test.dataset.telegramAction = "new";
+  panel.append(test);
+}
+async function retryTelegramTest(id, checkOnly) {
+  const marker = `telegram-test:${id}`;
+  if (
+    !authenticated ||
+    !navigator.onLine ||
+    (!checkOnly && !writable()) ||
+    notifying.has(marker)
+  )
+    return;
+  const current = record.telegramTests?.[id];
+  if (
+    !current ||
+    (!checkOnly &&
+      !["READY", "FAILED", "NOT_CONFIGURED"].includes(current.status))
+  )
+    return;
+  const epoch = generation,
+    key = recordKey();
+  notifying.add(marker);
+  controls();
+  try {
+    const response = await rpc(
+      checkOnly ? "workspaceStatus" : "workspaceNotify",
+      { id },
+    );
+    if (epoch !== generation || key !== recordKey())
+      throw Error("STALE_OPERATION");
+    const result = checkOnly ? response.result?.notification : response;
+    if (!result) throw Error("OPERATION_NOT_FOUND");
+    const candidate = structuredClone(record);
+    candidate.telegramTests[id] = { ...result, id };
+    persist(candidate);
+    record = candidate;
+  } catch (error) {
+    if (epoch !== generation || key !== recordKey())
+      throw Error("STALE_OPERATION");
+    if (
+      checkOnly ||
+      /^(OWNER_ONLY|PWA_READ_ONLY|SIGN_IN_REQUIRED|OPERATION_NOT_FOUND|STORAGE_ERROR)$/.test(
+        error?.message,
+      )
+    )
+      throw error;
+    const candidate = structuredClone(record);
+    candidate.telegramTests[id] = { ...current, status: "UNKNOWN" };
+    persist(candidate);
+    record = candidate;
+  } finally {
+    notifying.delete(marker);
+    if (epoch === generation) {
+      if (page === "profile") render();
+      else controls();
+    }
   }
 }
 async function logout() {
@@ -1542,16 +1914,40 @@ window.visualViewport?.addEventListener("resize", keyboardLayout);
 window.addEventListener("resize", keyboardLayout);
 document.addEventListener("focusin", keyboardLayout);
 document.addEventListener("focusout", () => setTimeout(keyboardLayout, 0));
-if ("ResizeObserver" in window) {
-  const observer = new ResizeObserver(() => {
-    const height =
-      $("#navigation").getBoundingClientRect().height +
-      $("#count-bar").getBoundingClientRect().height;
-    document.body.style.setProperty("--workspace-bottom", `${height}px`);
-  });
-  observer.observe($("#navigation"));
-  observer.observe($("#count-bar"));
+function measureLayout() {
+  const header = document.querySelector("header"),
+    filters = $("#workspace-filters"),
+    navigation = $("#navigation"),
+    countBar = $("#count-bar");
+  document.body.style.setProperty(
+    "--workspace-header-height",
+    `${header?.offsetHeight || 0}px`,
+  );
+  document.body.style.setProperty(
+    "--workspace-filters-height",
+    `${filters?.offsetHeight || 0}px`,
+  );
+  document.body.style.setProperty(
+    "--workspace-bottom",
+    `${(navigation?.offsetHeight || 0) + (countBar?.offsetHeight || 0)}px`,
+  );
 }
+function observeLayout() {
+  layoutObserver?.disconnect();
+  for (const element of [
+    document.querySelector("header"),
+    $("#workspace-filters"),
+    $("#navigation"),
+    $("#count-bar"),
+  ])
+    if (element) layoutObserver?.observe(element);
+  measureLayout();
+}
+if ("ResizeObserver" in window) {
+  layoutObserver = new ResizeObserver(measureLayout);
+}
+window.addEventListener("resize", measureLayout);
+observeLayout();
 setLanguage(language);
 controls();
 if ("serviceWorker" in navigator)

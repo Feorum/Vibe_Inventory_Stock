@@ -12,6 +12,8 @@ The current Google-backed app is a **four-page, session-free workspace**: Stock,
 
 The [older Google-mode guide](docs/google-mode.md) documents the original bridge and legacy session recovery. The previous interface remains at `legacy.html` to finish pending submissions without discarding their saved requests. The Node/SQLite application below remains separate and unchanged; Google mode does not mirror Sheets into SQLite. No rented host is needed.
 
+Workspace v4.1 adds sticky phone filters, compact counts/cards, separate searchable Yellow Cards, and an opt-in Tips mode. For bot credentials, chat-ID discovery, and an owner-only delivery test, see [Telegram setup](docs/telegram-setup.md).
+
 ## Run
 
 The remaining runtime, authentication, and workflow sections describe the separate **Node/SQLite** application. For the current Google-backed phone app, use the [workspace guide](docs/google-workspace.md).

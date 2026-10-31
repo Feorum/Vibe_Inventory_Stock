@@ -2,6 +2,18 @@
 
 The main Google PWA now has **Stock, Catalog, Team, and Profile**. Counting is always available; no session must be started. This implementation targets the currently used Google-backed application, not the separate Node/SQLite application. It adds no hosting service or third-party proxy.
 
+## Workspace v4.1 · phone controls, Team, and Telegram setup
+
+Stock search, location, and category filters form a compact sticky toolbar below the measured header. The quantity synchronization action and product cards are denser while retaining 44px touch targets, labeled per-zone inputs, last-recorded values, and explicit inactive status. Layout offsets include the toolbar and bottom controls; keyboard-aware behavior and 320px reflow remain supported.
+
+Team now separates **Shared notes** and **Yellow Cards** into keyboard-accessible tabs. Cards use compact rows grouped by their actual database categories (including A/C/D), with native collapsible groups and a search across codes, names, sizes, categories, and notes. Search opens matching categories; clearing it restores manual collapse choices. These view controls do not change card data or counting drafts.
+
+**Profile → Tips** is off by default and saved on this device for the connected account and database. It reveals optional explanations when enabled. Authentication/privacy notices, required labels, save outcomes, conflicts, and safety warnings always remain visible. Changing Tips never submits a count or clears drafts.
+
+Profile also shows Telegram configuration presence and an owner-only test-message action. Follow [Telegram bot setup](telegram-setup.md) for private credentials, safe chat-ID discovery, delivery verification, and retry behavior. Upgrade the three script files listed there and publish the frontend; an existing Workspace installation needs **no new migration or installer** for v4.1.
+
+Verified on 31 October 2026: **145/145 backend/model/translation tests** and **141/141 browser checks** across desktop, Samsung-size, and iPhone-size Chromium. Following the final two-row toolbar adjustment, **6/6 mobile layout/accessibility regressions** were rerun successfully. Tests use isolated workbook/Telegram mocks, not the live café database or bot; physical-phone and real Telegram delivery acceptance remain required.
+
 ## Fixing `ParseError: Unexpected token ILLEGAL` at line 383
 
 The first Workspace release contained an integer-literal syntax that the Apps Script parser rejects. Node-based tests accepted that syntax, so they did not reveal the platform-specific save failure. The corrected `Workspace.gs` uses exact scaled decimal-text arithmetic instead, without relying on an arbitrary-precision integer runtime. Browser and Node arithmetic are unchanged.

@@ -54,7 +54,9 @@ function workspaceNotificationWords_(language) {
 
 function workspaceNotificationNumber_(value, language) {
   // Do not round accepted eight-decimal quantities merely for a notification.
-  const text = Number(value).toFixed(8).replace(/\.?0+$/, "");
+  const text = Number(value)
+    .toFixed(8)
+    .replace(/\.?0+$/, "");
   return language === "ru" ? text.replace(".", ",") : text;
 }
 
@@ -185,6 +187,142 @@ function workspaceNotificationPublic_(notification) {
   };
 }
 
+// Configuration presence is not a delivery guarantee. The browser receives
+// booleans only; credential values and even the target chat stay server-side.
+function workspaceTelegramStatus_(email) {
+  const properties = prop_();
+  const tokenConfigured = Boolean(properties.getProperty("TELEGRAM_TOKEN"));
+  const chatConfigured = Boolean(properties.getProperty("TELEGRAM_CHAT_ID"));
+  return {
+    configured: tokenConfigured && chatConfigured,
+    tokenConfigured: tokenConfigured,
+    chatConfigured: chatConfigured,
+    canTest: workspaceManage_(email),
+    writesEnabled: properties.getProperty("PWA_WRITES_ENABLED") === "true",
+  };
+}
+
+// Editor-only owner utility. Read recent chat metadata without placing a bot
+// token in browser history, acknowledging updates, or altering a webhook.
+function listWorkspaceTelegramChats() {
+  v4Owner_();
+  const token = prop_().getProperty("TELEGRAM_TOKEN");
+  if (!token) throw Error("TELEGRAM_TOKEN_MISSING");
+  let response;
+  try {
+    response = UrlFetchApp.fetch(
+      "https://api.telegram.org/bot" + token + "/getUpdates",
+      {
+        method: "get",
+        muteHttpExceptions: true,
+      },
+    );
+  } catch (ignored) {
+    throw Error("TELEGRAM_CHAT_DISCOVERY_FAILED");
+  }
+  if (response.getResponseCode() === 409)
+    throw Error("TELEGRAM_UPDATES_UNAVAILABLE");
+  let body;
+  try {
+    body = JSON.parse(response.getContentText());
+  } catch (ignored) {
+    throw Error("TELEGRAM_CHAT_DISCOVERY_FAILED");
+  }
+  if (
+    response.getResponseCode() !== 200 ||
+    !body ||
+    body.ok !== true ||
+    !Array.isArray(body.result)
+  )
+    throw Error("TELEGRAM_CHAT_DISCOVERY_FAILED");
+  const found = new Map();
+  for (const update of body.result) {
+    const event =
+      update &&
+      (update.message ||
+        update.edited_message ||
+        update.channel_post ||
+        update.edited_channel_post ||
+        update.my_chat_member ||
+        update.chat_member ||
+        update.chat_join_request ||
+        (update.callback_query && update.callback_query.message));
+    const chat = event && event.chat;
+    if (
+      !chat ||
+      !["private", "group", "supergroup", "channel"].includes(chat.type)
+    )
+      continue;
+    if (
+      (typeof chat.id !== "number" || !Number.isSafeInteger(chat.id)) &&
+      (typeof chat.id !== "string" || !/^-?\d+$/.test(chat.id))
+    )
+      continue;
+    const id = String(chat.id);
+    found.set(id, {
+      id: id,
+      type: chat.type,
+      title:
+        chat.type === "private"
+          ? "Private chat"
+          : String(chat.title || "")
+              .replace(/[\x00-\x1f\x7f]/g, " ")
+              .slice(0, 160),
+    });
+  }
+  const chats = [...found.values()];
+  console.log(JSON.stringify(chats));
+  return chats;
+}
+
+// Called only after an explicit owner action. A failed or lost browser reply
+// retries the same immutable request, not a second Telegram send.
+function workspaceTelegramTest_(email, request) {
+  workspaceReady_();
+  if (!workspaceManage_(email)) throw Error("OWNER_ONLY");
+  if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true")
+    throw Error("PWA_READ_ONLY");
+  if (!request || !["en", "ru"].includes(request.language))
+    throw Error("INVALID_REQUEST");
+  const id = workspaceId_(request.id);
+  v3Lock_(() => {
+    if (!workspaceManage_(email)) throw Error("OWNER_ONLY");
+    if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true")
+      throw Error("PWA_READ_ONLY");
+    const previous = workspacePrior_(id, email, "telegramTest", request);
+    if (previous) return;
+    const status = workspaceTelegramStatus_(email);
+    const text =
+      request.language === "ru"
+        ? "VARKA · Проверка Telegram\n\nБот подключён: это тестовое уведомление. Остатки склада не изменены."
+        : "VARKA · Telegram test\n\nThe bot is connected: this is a test notification. Inventory quantities have not changed.";
+    workspaceAppendOperation_(
+      id,
+      email,
+      "telegramTest",
+      workspaceHash_(request),
+      {
+        id: id,
+        state: "COMMITTED",
+        notification: {
+          version: 1,
+          status: status.configured ? "READY" : "NOT_CONFIGURED",
+          scope: "TEST",
+          language: request.language,
+          messages: [text],
+          delivery: [{ state: "READY" }],
+          createdAt: new Date().toISOString(),
+        },
+      },
+    );
+  });
+  return {
+    id: id,
+    state: "COMMITTED",
+    notification: workspaceDeliver_(id, email),
+  };
+}
+
 function workspaceDeliver_(operationId, email, allowReminder) {
   const started = Date.now();
   while (Date.now() - started < 240000) {
@@ -194,6 +332,7 @@ function workspaceDeliver_(operationId, email, allowReminder) {
         throw Error("OPERATION_NOT_FOUND");
       if (
         operation.kind !== "count" &&
+        operation.kind !== "telegramTest" &&
         !(
           allowReminder === true &&
           operation.kind === "reminder" &&
@@ -201,6 +340,13 @@ function workspaceDeliver_(operationId, email, allowReminder) {
         )
       )
         throw Error("INVALID_OPERATION_KIND");
+      if (operation.kind === "telegramTest") {
+        if (!workspaceManage_(email)) throw Error("OWNER_ONLY");
+        if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true")
+          throw Error("PWA_READ_ONLY");
+        if (operation.result.state !== "COMMITTED")
+          throw Error("NOTIFICATION_NOT_AVAILABLE");
+      }
       if (operation.kind === "count" && operation.result.state !== "COMMITTED")
         throw Error("INVENTORY_NOT_CONFIRMED");
       const notification = operation.result.notification;

@@ -318,6 +318,10 @@ function workspaceLoad_(email) {
         manageReminders: workspaceManage_(email),
       },
       reminders: { configured: workspaceRemindersConfigured_() },
+      telegram:
+        typeof workspaceTelegramStatus_ === "function"
+          ? workspaceTelegramStatus_(email)
+          : null,
     };
   });
 }
@@ -1091,6 +1095,11 @@ function workspaceDispatch_(method, token, body) {
     });
   if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true")
     throw Error("PWA_READ_ONLY");
+  if (method === "workspaceTelegramTest") {
+    if (typeof workspaceTelegramTest_ !== "function")
+      throw Error("TELEGRAM_SETUP_NOT_AVAILABLE");
+    return workspaceTelegramTest_(email, body);
+  }
   if (method === "workspaceCount" || method === "workspaceCatalog") {
     const result =
       method === "workspaceCount"

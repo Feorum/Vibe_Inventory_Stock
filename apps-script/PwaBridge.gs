@@ -64,6 +64,7 @@ function pwaDispatch(request) {
       case "workspaceCatalog":
       case "workspaceTeam":
       case "workspaceNotify":
+      case "workspaceTelegramTest":
         if (!writes) throw Error("PWA_READ_ONLY");
         if (typeof workspaceDispatch_ !== "function")
           throw Error("WORKSPACE_NOT_INSTALLED");
