@@ -308,6 +308,7 @@ function workspaceLoad_(email) {
       version: 1,
       databaseId: book_().getId(),
       loadedAt: new Date().toISOString(),
+      timeZone: prop_().getProperty("CAFE_TIMEZONE") || "Europe/Minsk",
       products: products,
       zones: v8Zones_(),
       categories: [...new Set(products.map((p) => p.category))].sort(),

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   storageKey,
   decimalValue,
@@ -10,6 +11,8 @@ import {
   conflicts,
   countingProgress,
   filterProducts,
+  countDateKey,
+  validateCountDateFilter,
   buildSubmission,
   applyAcknowledgment,
   mergeSnapshot,
@@ -49,6 +52,300 @@ const entered = (p = product(), version = "edit-1") =>
     },
     { editVersion: version, now: "2026-10-30T08:00:00Z" },
   );
+
+test("saved count calendar dates use the café timezone and never invent missing history", () => {
+  assert.equal(
+    countDateKey("2026-11-02T21:00:00Z", "Europe/Minsk"),
+    "2026-11-03",
+  );
+  assert.equal(
+    countDateKey("2026-11-02T20:59:59.999Z", "Europe/Minsk"),
+    "2026-11-02",
+  );
+  assert.equal(
+    countDateKey("2026-01-01T00:30:00Z", "America/New_York"),
+    "2025-12-31",
+  );
+  for (const value of [
+    null,
+    undefined,
+    "",
+    "invalid",
+    "2026-02-30T12:00:00Z",
+    "2026-11-03T00:30:00",
+    "2026-11-03",
+    "0",
+    0,
+    false,
+    new Date(NaN),
+  ])
+    assert.equal(countDateKey(value, "Europe/Minsk"), null, String(value));
+  assert.throws(
+    () => countDateKey("2026-11-03T12:00:00Z", "Invalid/Zone"),
+    /INVALID_TIME_ZONE/,
+  );
+});
+
+test("saved date filtering is identical under different device timezones and rejects ambiguous history", () => {
+  const moduleUrl = new URL("../google-pwa/workspace-model.js", import.meta.url)
+    .href;
+  const code = `
+    import { countDateKey, filterProducts } from ${JSON.stringify(moduleUrl)};
+    const products = [
+      { id: 'today', lastCountedAt: '2026-11-02T22:30:00Z' },
+      { id: 'offset', lastCountedAt: '2026-11-03T01:30:00+03:00' },
+      { id: 'ambiguous', lastCountedAt: '2026-11-03T00:30:00' },
+      { id: 'date-only', lastCountedAt: '2026-11-03' },
+      { id: 'never', lastCountedAt: null }
+    ];
+    const options = { timeZone: 'Europe/Minsk', now: '2026-11-02T22:45:00Z' };
+    console.log(JSON.stringify({
+      keys: products.map(p => countDateKey(p.lastCountedAt, options.timeZone)),
+      today: filterProducts(products, { lastCounted: 'TODAY' }, options).map(p => p.id),
+      never: filterProducts(products, { lastCounted: 'NEVER' }, options).map(p => p.id)
+    }));
+  `;
+  for (const deviceTimezone of ["UTC", "Pacific/Honolulu", "Asia/Tokyo"]) {
+    const result = JSON.parse(
+      execFileSync(process.execPath, ["--input-type=module", "--eval", code], {
+        encoding: "utf8",
+        env: { ...process.env, TZ: deviceTimezone },
+      }),
+    );
+    assert.deepEqual(
+      result,
+      {
+        keys: ["2026-11-03", "2026-11-03", null, null, null],
+        today: ["today", "offset"],
+        never: ["ambiguous", "date-only", "never"],
+      },
+      deviceTimezone,
+    );
+  }
+});
+
+test("today and yesterday cross midnight in the café, not the device timezone", () => {
+  const products = [
+    product({ id: "today", lastCountedAt: "2026-11-02T21:00:00Z" }),
+    product({ id: "yesterday", lastCountedAt: "2026-11-02T20:59:59.999Z" }),
+    product({ id: "zero", last: 0, lastCountedAt: "2026-11-02T22:00:00Z" }),
+    product({ id: "never", lastCountedAt: null }),
+    product({ id: "invalid", lastCountedAt: "bad" }),
+  ];
+  const options = { timeZone: "Europe/Minsk", now: "2026-11-02T22:30:00Z" };
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "TODAY" }, options).map(
+      (p) => p.id,
+    ),
+    ["today", "zero"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "YESTERDAY" }, options).map(
+      (p) => p.id,
+    ),
+    ["yesterday"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "NEVER" }, options).map(
+      (p) => p.id,
+    ),
+    ["never", "invalid"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "ALL" }, options).map((p) => p.id),
+    products.map((p) => p.id),
+  );
+});
+
+test("7 and 30 day filters use calendar-day age, including DST and leap-year boundaries", () => {
+  const products = [
+    product({ id: "seven", lastCountedAt: "2026-03-03T04:59:59Z" }), // Mar 2 23:59 EST.
+    product({ id: "six", lastCountedAt: "2026-03-03T05:00:00Z" }),
+    product({ id: "thirty", lastCountedAt: "2026-02-07T17:00:00Z" }),
+    product({ id: "future", lastCountedAt: "2026-03-10T04:30:00Z" }),
+    product({ id: "never", lastCountedAt: null }),
+  ];
+  const options = { timeZone: "America/New_York", now: "2026-03-09T04:30:00Z" };
+  // Spring forward makes seven calendar days less than 7*24 elapsed hours.
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "DAYS_7" }, options).map(
+      (p) => p.id,
+    ),
+    ["seven", "thirty"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { lastCounted: "DAYS_30" }, options).map(
+      (p) => p.id,
+    ),
+    ["thirty"],
+  );
+  const leap = [
+    product({ id: "leap", lastCountedAt: "2024-02-29T20:00:00Z" }),
+    product({ id: "march", lastCountedAt: "2024-03-01T20:00:00Z" }),
+  ];
+  assert.deepEqual(
+    filterProducts(
+      leap,
+      { lastCounted: "DAYS_30" },
+      { timeZone: "UTC", now: "2024-03-30T00:00:00Z" },
+    ).map((p) => p.id),
+    ["leap"],
+  );
+  const newYear = [product({ lastCountedAt: "2025-12-31T20:59:00Z" })];
+  assert.equal(
+    filterProducts(
+      newYear,
+      { lastCounted: "DAYS_7" },
+      { timeZone: "Europe/Minsk", now: "2026-01-06T21:00:00Z" },
+    ).length,
+    1,
+  );
+});
+
+test("custom count ranges are inclusive café calendar dates and validate actual dates", () => {
+  const products = [
+    product({ id: "before", lastCountedAt: "2026-11-01T20:59:59Z" }),
+    product({ id: "start", lastCountedAt: "2026-11-01T21:00:00Z" }),
+    product({ id: "end", lastCountedAt: "2026-11-03T20:59:59.999Z" }),
+    product({ id: "after", lastCountedAt: "2026-11-03T21:00:00Z" }),
+    product({ id: "never", lastCountedAt: null }),
+  ];
+  const filters = {
+    lastCounted: "RANGE",
+    dateFrom: "2026-11-02",
+    dateTo: "2026-11-03",
+  };
+  assert.equal(validateCountDateFilter(filters), true);
+  assert.deepEqual(
+    filterProducts(products, filters, { timeZone: "Europe/Minsk" }).map(
+      (p) => p.id,
+    ),
+    ["start", "end"],
+  );
+  assert.equal(
+    validateCountDateFilter({
+      ...filters,
+      dateFrom: "2024-02-29",
+      dateTo: "2024-02-29",
+    }),
+    true,
+  );
+  for (const invalid of [
+    { dateFrom: "2026-11-04" },
+    { dateFrom: "" },
+    { dateTo: undefined },
+    { dateFrom: "2026-02-29" },
+    { dateFrom: "2026-04-31" },
+    { dateFrom: "2026-2-03" },
+    { dateFrom: "2026-13-01" },
+    { dateFrom: "0000-01-01" },
+  ]) {
+    assert.throws(
+      () => validateCountDateFilter({ ...filters, ...invalid }),
+      /INVALID_DATE_RANGE/,
+    );
+    assert.throws(
+      () => filterProducts(products, { ...filters, ...invalid }),
+      /INVALID_DATE_RANGE/,
+    );
+  }
+});
+
+test("saved count dates combine with search, location and category using AND without changing drafts", () => {
+  const products = [
+    product({ id: "milk", lastCountedAt: "2026-11-02T22:00:00Z" }),
+    product({
+      id: "other-zone",
+      zones: ["freezer"],
+      lastCountedAt: "2026-11-02T22:00:00Z",
+    }),
+    product({
+      id: "other-category",
+      category: "Other",
+      lastCountedAt: "2026-11-02T22:00:00Z",
+    }),
+    product({ id: "yesterday", lastCountedAt: "2026-11-01T22:00:00Z" }),
+  ];
+  const original = structuredClone(products);
+  const drafts = { milk: entered(products[0]) };
+  drafts.milk = editDraft(
+    products[0],
+    drafts.milk,
+    { locations: { fridge: { value: "0" } } },
+    { now: "2026-12-01T12:00:00Z" },
+  );
+  assert.deepEqual(
+    filterProducts(
+      products,
+      {
+        search: "milk",
+        zone: "fridge",
+        category: "Dairy",
+        lastCounted: "TODAY",
+      },
+      { timeZone: "Europe/Minsk", now: "2026-11-02T22:30:00Z" },
+    ).map((p) => p.id),
+    ["milk"],
+  );
+  assert.deepEqual(products, original);
+  assert.equal(drafts.milk.countedAt, "2026-12-01T12:00:00Z");
+  assert.equal(products[0].lastCountedAt, "2026-11-02T22:00:00Z");
+  assert.equal(buildSubmission(snapshot(products), drafts).items.length, 1);
+});
+
+test("history sorting puts never counted first for oldest, last for newest, and breaks ties by localized name and ID", () => {
+  const products = [
+    product({
+      id: "old-b",
+      en: "Zulu",
+      ru: "Альфа",
+      lastCountedAt: "2026-01-01T13:00:00Z",
+    }),
+    product({ id: "never-b", en: "Beta", lastCountedAt: null }),
+    product({
+      id: "old-a",
+      en: "Alpha",
+      ru: "Яблоко",
+      lastCountedAt: "2026-01-01T13:00:00Z",
+    }),
+    product({ id: "new", en: "Newest", lastCountedAt: "2026-11-01T13:00:00Z" }),
+    product({ id: "never-a", en: "Alpha", lastCountedAt: "invalid" }),
+    product({
+      id: "old-a2",
+      en: "Alpha",
+      ru: "Яблоко",
+      lastCountedAt: "2026-01-01T13:00:00Z",
+    }),
+  ];
+  const original = structuredClone(products);
+  const options = { timeZone: "Europe/Minsk", language: "en" };
+  assert.deepEqual(
+    filterProducts(products, { sort: "OLDEST" }, options).map((p) => p.id),
+    ["never-a", "never-b", "old-a", "old-a2", "old-b", "new"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { sort: "NEWEST" }, options).map((p) => p.id),
+    ["new", "old-a", "old-a2", "old-b", "never-a", "never-b"],
+  );
+  assert.deepEqual(
+    filterProducts(products, { sort: "NAME" }, options).map((p) => p.id),
+    ["never-a", "old-a", "old-a2", "never-b", "new", "old-b"],
+  );
+  const dated = products.filter((p) => p.id.startsWith("old"));
+  assert.deepEqual(
+    filterProducts(
+      dated,
+      { sort: "OLDEST" },
+      { ...options, language: "ru" },
+    ).map((p) => p.id),
+    ["old-b", "old-a", "old-a2"],
+  );
+  assert.deepEqual(
+    filterProducts(products).map((p) => p.id),
+    products.map((p) => p.id),
+  );
+  assert.deepEqual(products, original);
+});
 
 test("workspace storage is scoped to database, endpoint and authenticated account", () => {
   const key = storageKey("sheet-a", "Staff@Example.test", "https://endpoint-a");

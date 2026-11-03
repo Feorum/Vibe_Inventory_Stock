@@ -167,25 +167,167 @@ export function countingProgress(snapshot, drafts = {}) {
   };
 }
 
-export function filterProducts(products, filters = {}) {
+const countDateFormatters = new Map();
+const COUNT_DATE_FILTERS = new Set([
+  "ALL",
+  "TODAY",
+  "YESTERDAY",
+  "DAYS_7",
+  "DAYS_30",
+  "NEVER",
+  "RANGE",
+]);
+
+// Parse a calendar date without relying on the device timezone or accepting
+// Date's normalization of impossible dates such as 30 February.
+function calendarDay(value) {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    value.startsWith("0000")
+  )
+    return null;
+  const milliseconds = Date.parse(`${value}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(milliseconds) ||
+    new Date(milliseconds).toISOString().slice(0, 10) !== value
+  )
+    return null;
+  return Math.floor(milliseconds / 86400000);
+}
+
+export function validateCountDateFilter(filters = {}) {
+  const mode = filters.lastCounted || "ALL";
+  if (!COUNT_DATE_FILTERS.has(mode)) throw failure("INVALID_DATE_RANGE");
+  if (mode !== "RANGE") return true;
+  const from = calendarDay(filters.dateFrom);
+  const to = calendarDay(filters.dateTo);
+  if (from === null || to === null || from > to)
+    throw failure("INVALID_DATE_RANGE");
+  return true;
+}
+
+// Saved timestamps are instants; their café calendar day is independent of the
+// device's timezone. Missing/invalid history remains unknown, never epoch zero.
+export function countDateKey(timestamp, timeZone = "Europe/Minsk") {
+  if (
+    !(timestamp instanceof Date) &&
+    (typeof timestamp !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp))
+  )
+    return null;
+  if (
+    typeof timestamp === "string" &&
+    calendarDay(timestamp.slice(0, 10)) === null
+  )
+    return null;
+  const milliseconds =
+    timestamp instanceof Date ? timestamp.getTime() : Date.parse(timestamp);
+  if (!Number.isFinite(milliseconds)) return null;
+  let formatter = countDateFormatters.get(timeZone);
+  if (!formatter) {
+    try {
+      formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        calendar: "gregory",
+        numberingSystem: "latn",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+    } catch {
+      throw failure("INVALID_TIME_ZONE");
+    }
+    countDateFormatters.set(timeZone, formatter);
+  }
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(new Date(milliseconds))
+      .map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}`;
+}
+
+export function filterProducts(products, filters = {}, options = {}) {
+  validateCountDateFilter(filters);
+  const mode = filters.lastCounted || "ALL";
+  const timeZone = options.timeZone || "Europe/Minsk";
+  const now = options.now === undefined ? new Date() : options.now;
+  const today =
+    mode === "TODAY" ||
+    mode === "YESTERDAY" ||
+    mode === "DAYS_7" ||
+    mode === "DAYS_30"
+      ? calendarDay(countDateKey(now, timeZone))
+      : null;
+  const history = new Map();
+  const dateFor = (product) => {
+    if (!history.has(product))
+      history.set(product, countDateKey(product.lastCountedAt, timeZone));
+    return history.get(product);
+  };
   const search = String(filters.search || "")
     .trim()
     .toLocaleLowerCase()
     .replace(/ё/g, "е");
-  return products.filter((product) => {
+  const visible = products.filter((product) => {
     if (product.deleted) return false;
     const name = [product.ru, product.en, product.name]
       .filter(Boolean)
       .join(" ")
       .toLocaleLowerCase()
       .replace(/ё/g, "е");
-    return (
+    if (!(
       (!search || name.includes(search)) &&
       (!filters.zone ||
         (filters.zone === "unassigned"
           ? !product.zones?.length
           : product.zones?.includes(filters.zone))) &&
       (!filters.category || product.category === filters.category)
+    ))
+      return false;
+    if (mode === "ALL") return true;
+    const key = dateFor(product);
+    if (mode === "NEVER") return key === null;
+    if (key === null) return false;
+    if (mode === "RANGE")
+      return key >= filters.dateFrom && key <= filters.dateTo;
+    const day = calendarDay(key);
+    if (today === null || day === null) return false;
+    const age = today - day;
+    if (mode === "TODAY") return age === 0;
+    if (mode === "YESTERDAY") return age === 1;
+    return age >= (mode === "DAYS_7" ? 7 : 30);
+  });
+  if (!["NAME", "OLDEST", "NEWEST"].includes(filters.sort)) return visible;
+  const language = options.language === "ru" ? "ru" : "en";
+  const nameFor = (product) =>
+    (language === "ru" ? product.ru || product.en : product.en || product.ru) ||
+    product.name ||
+    product.id;
+  const collator = new Intl.Collator(language, {
+    sensitivity: "base",
+    numeric: true,
+  });
+  return visible.sort((a, b) => {
+    if (filters.sort !== "NAME") {
+      const aDate = dateFor(a),
+        bDate = dateFor(b);
+      if (aDate === null || bDate === null) {
+        if (aDate !== bDate)
+          return (
+            (aDate === null ? -1 : 1) * (filters.sort === "OLDEST" ? 1 : -1)
+          );
+      } else {
+        const difference =
+          Date.parse(a.lastCountedAt) - Date.parse(b.lastCountedAt);
+        if (difference)
+          return difference * (filters.sort === "OLDEST" ? 1 : -1);
+      }
+    }
+    return (
+      collator.compare(String(nameFor(a)), String(nameFor(b))) ||
+      String(a.id).localeCompare(String(b.id))
     );
   });
 }

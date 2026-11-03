@@ -90,3 +90,60 @@ test("compact counting labels and placeholders remain complete in both languages
   );
   assert.equal(translate("ru", "onlyUnchecked"), "Только непроверенные");
 });
+
+test("historical filters and local draft labels are complete and keep matching placeholders", () => {
+  for (const key of [
+    "lastCountedFilter",
+    "dateAll",
+    "dateToday",
+    "dateYesterday",
+    "dateDays7",
+    "dateDays30",
+    "dateNever",
+    "dateRange",
+    "dateFrom",
+    "dateTo",
+    "sortProducts",
+    "sortOldest",
+    "sortNewest",
+    "sortName",
+    "historicalDateHelp",
+    "cafeTimeZone",
+    "cafeTimeZoneFallback",
+    "INVALID_DATE_RANGE",
+    "INVALID_TIME_ZONE",
+    "currentDraftHelp",
+    "noFilteredProducts",
+    "showCountTime",
+    "hideCountTime",
+    "showAdditional",
+    "hideAdditional",
+    "draftPartialLocations",
+    "draftInvalid",
+    "localTotal",
+    "dismissMessage",
+    "draftEntered",
+    "filtersResult",
+  ]) {
+    assert.notEqual(en[key], ru[key], key);
+    assert.match(ru[key], /[а-яё]/i, key);
+    assert.deepEqual(
+      [...en[key].matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort(),
+      [...ru[key].matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort(),
+      key,
+    );
+  }
+  assert.equal(translate("ru", "draftEntered"), "В черновике");
+  assert.equal(
+    translate("ru", "draftPartialLocations", { entered: 1, total: 2 }),
+    "Заполнено 1 из 2 мест",
+  );
+  assert.equal(
+    translate("en", "draftPartialLocations", { entered: 1, total: 2 }),
+    "Filled 1 of 2 locations",
+  );
+  assert.equal(
+    translate("ru", "filtersResult", { shown: 18, total: 133 }),
+    "Показано: 18 из 133",
+  );
+});

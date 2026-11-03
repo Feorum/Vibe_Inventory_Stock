@@ -169,7 +169,7 @@ export const en = {
     "Device storage is full or blocked. Keep this page open; no new request was sent. Free device storage or download a backup.",
   localSaved: "Entered information saved on this device.",
   version: "VARKA · Workspace v4",
-  filtersResult: "{shown} of {total} products",
+  filtersResult: "Shown: {shown} of {total}",
   itemCount: { one: "{count} product", other: "{count} products" },
   INVALID_QUANTITY:
     "Enter a nonnegative number with at most eight decimal places. A comma or decimal point is accepted.",
@@ -381,7 +381,7 @@ export const ru = {
     "Хранилище устройства заполнено или заблокировано. Не закрывайте страницу: новый запрос не отправлен. Освободите место или скачайте резервную копию.",
   localSaved: "Введённые данные сохранены на устройстве.",
   version: "VARKA · Рабочее пространство v4",
-  filtersResult: "{shown} из {total} товаров",
+  filtersResult: "Показано: {shown} из {total}",
   itemCount: {
     one: "{count} товар",
     few: "{count} товара",
@@ -430,7 +430,7 @@ export const ru = {
 
 export const dictionaries = { en, ru };
 Object.assign(en, {
-  draftEntered: "Entered in draft",
+  draftEntered: "In draft",
   partialDraft: "Partially entered — complete every location",
   submissionSummary:
     "Entered {entered} of {total} products. The rest will remain unchanged.",
@@ -475,7 +475,7 @@ Object.assign(en, {
     "Some entries conflicted or failed. Review the listed products. Accepted entries are saved; other drafts are preserved.",
 });
 Object.assign(ru, {
-  draftEntered: "Внесено в черновик",
+  draftEntered: "В черновике",
   partialDraft: "Внесено частично — заполните все места хранения",
   submissionSummary:
     "Внесено {entered} из {total} товаров. Остальные останутся без изменений.",
@@ -520,7 +520,43 @@ Object.assign(ru, {
     "Некоторые записи конфликтуют или не сохранены. Проверьте указанные товары. Принятые записи сохранены, остальные черновики оставлены.",
 });
 Object.assign(en, {
-  version: "VARKA · Workspace v4.3",
+  version: "VARKA · Workspace v4.4",
+  lastCountedFilter: "Last counted",
+  dateAll: "All dates",
+  dateToday: "Today",
+  dateYesterday: "Yesterday",
+  dateDays7: "Not counted for 7+ days",
+  dateDays30: "Not counted for 30+ days",
+  dateNever: "Never counted",
+  dateRange: "Custom date range",
+  dateFrom: "Start date",
+  dateTo: "End date",
+  sortProducts: "Sort products",
+  sortOldest: "Oldest counted first",
+  sortNewest: "Most recently counted first",
+  sortName: "Product name",
+  historicalDateHelp:
+    "Saved count dates are recorded per product, not separately per location. Choosing a location does not change the date used. Local drafts do not change this history.",
+  cafeTimeZone:
+    "Café time zone: {timeZone}. Dates and calendar-day ages use this zone.",
+  cafeTimeZoneFallback:
+    "This older server does not provide its time zone. Europe/Minsk is used; update and redeploy Workspace.gs to load the café's configured zone.",
+  INVALID_DATE_RANGE:
+    "Choose valid start and end dates. The start date must not be after the end date.",
+  INVALID_TIME_ZONE:
+    "The café's configured time zone is invalid. Ask the owner to correct CAFE_TIMEZONE in Apps Script and refresh the database.",
+  currentDraftHelp: "Unchecked in this draft, not in saved history.",
+  noFilteredProducts:
+    "No products match the combined search and filters. Reset filters to see all products; your drafts are preserved.",
+  showCountTime: "Count date",
+  hideCountTime: "Hide date",
+  showAdditional: "Additional options",
+  hideAdditional: "Hide options",
+  draftPartialLocations: "Filled {entered} of {total} locations",
+  draftInvalid: "In draft — review the highlighted fields",
+  localTotal: "Total",
+  noCountsSaved: "No new counts were saved. Recorded quantities are unchanged.",
+  dismissMessage: "Dismiss message",
   refreshCompact: "Refresh",
   filtersButton: "Filters",
   applyFilters: "Apply filters",
@@ -598,7 +634,44 @@ Object.assign(en, {
     "Set the bot token and destination chat ID privately in Apps Script Properties.",
 });
 Object.assign(ru, {
-  version: "VARKA · Рабочее пространство v4.3",
+  version: "VARKA · Рабочее пространство v4.4",
+  lastCountedFilter: "Последний пересчёт",
+  dateAll: "Все даты",
+  dateToday: "Сегодня",
+  dateYesterday: "Вчера",
+  dateDays7: "Не пересчитывались 7+ дней",
+  dateDays30: "Не пересчитывались 30+ дней",
+  dateNever: "Никогда не пересчитывались",
+  dateRange: "Свой диапазон дат",
+  dateFrom: "Начальная дата",
+  dateTo: "Конечная дата",
+  sortProducts: "Сортировка",
+  sortOldest: "Сначала давние пересчёты",
+  sortNewest: "Сначала недавние пересчёты",
+  sortName: "Название товара",
+  historicalDateHelp:
+    "Дата сохранённого пересчёта общая для товара: отдельных дат по местам хранения нет. Выбор места не меняет эту дату. Локальный черновик не меняет историю.",
+  cafeTimeZone:
+    "Часовой пояс кофейни: {timeZone}. Даты и возраст в календарных днях считаются в нём.",
+  cafeTimeZoneFallback:
+    "Старый сервер не передаёт часовой пояс. Используется Europe/Minsk; обновите Workspace.gs и развёртывание, чтобы загрузить настроенный пояс кофейни.",
+  INVALID_DATE_RANGE:
+    "Выберите корректные начальную и конечную даты. Начальная дата не должна быть позже конечной.",
+  INVALID_TIME_ZONE:
+    "В настройках кофейни указан неверный часовой пояс. Попросите владельца исправить CAFE_TIMEZONE в Apps Script и обновите базу.",
+  currentDraftHelp: "Непроверенные — в текущем черновике, не по истории.",
+  noFilteredProducts:
+    "Ни один товар не подходит под поиск и выбранные фильтры. Сбросьте фильтры, чтобы увидеть все товары; черновики сохранятся.",
+  showCountTime: "Дата пересчёта",
+  hideCountTime: "Скрыть дату",
+  showAdditional: "Дополнительно",
+  hideAdditional: "Свернуть",
+  draftPartialLocations: "Заполнено {entered} из {total} мест",
+  draftInvalid: "В черновике — проверьте выделенные поля",
+  localTotal: "Итого",
+  noCountsSaved:
+    "Новые пересчёты не сохранены. Записанные остатки не изменены.",
+  dismissMessage: "Скрыть сообщение",
   refreshCompact: "Обновить",
   filtersButton: "Фильтры",
   applyFilters: "Применить",

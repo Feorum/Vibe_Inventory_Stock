@@ -12,6 +12,8 @@ import {
   mergeSnapshot,
   storageKey,
   countingProgress,
+  validateCountDateFilter,
+  countDateKey,
 } from "./workspace-model.js";
 
 const $ = (value) => document.querySelector(value);
@@ -49,10 +51,23 @@ const notifying = new Set();
 const teamViews = new Map();
 const stockDetails = new Map();
 const pagePositions = new Map();
+const freshDeliveries = new Map();
+let messageTimer;
+let dialogPosition;
 let layoutObserver;
 let updateStockProgress = () => {};
+const stockFilterDefaults = () => ({
+  search: "",
+  zone: "",
+  category: "",
+  onlyUnchecked: false,
+  lastCounted: "ALL",
+  dateFrom: "",
+  dateTo: "",
+  sort: "NAME",
+});
 const filters = {
-  stock: { search: "", zone: "", category: "", onlyUnchecked: false },
+  stock: stockFilterDefaults(),
   catalog: { search: "", zone: "", category: "" },
 };
 const t = (key, values) => translate(language, key, values);
@@ -102,13 +117,44 @@ const quantityText = (value) =>
     : new Intl.NumberFormat(language, { maximumFractionDigits: 8 }).format(
         Number(value),
       );
-const dateText = (value) =>
-  value && Number.isFinite(Date.parse(value))
-    ? new Intl.DateTimeFormat(language, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(value))
-    : t("notCounted");
+function dateText(value, short = false) {
+  try {
+    if (!countDateKey(value, cafeTimeZone())) return t("notCounted");
+    return new Intl.DateTimeFormat(
+      language,
+      short
+        ? { day: "numeric", month: "short", timeZone: cafeTimeZone() }
+        : { dateStyle: "medium", timeStyle: "short", timeZone: cafeTimeZone() },
+    ).format(new Date(value));
+  } catch {
+    return t("INVALID_TIME_ZONE");
+  }
+}
+const cafeTimeZone = () => record.snapshot?.timeZone || "Europe/Minsk";
+const dateFilterKeys = {
+  ALL: "dateAll",
+  TODAY: "dateToday",
+  YESTERDAY: "dateYesterday",
+  DAYS_7: "dateDays7",
+  DAYS_30: "dateDays30",
+  NEVER: "dateNever",
+  RANGE: "dateRange",
+};
+const sortKeys = {
+  NAME: "sortName",
+  OLDEST: "sortOldest",
+  NEWEST: "sortNewest",
+};
+function dateFilterText(filter) {
+  if (filter.lastCounted !== "RANGE")
+    return t(dateFilterKeys[filter.lastCounted] || "dateAll");
+  const display = (day) =>
+    new Intl.DateTimeFormat(language, {
+      dateStyle: "medium",
+      timeZone: "UTC",
+    }).format(new Date(`${day}T00:00:00Z`));
+  return `${t("dateRange")}: ${display(filter.dateFrom)} – ${display(filter.dateTo)}`;
+}
 const writable = () =>
   authenticated &&
   navigator.onLine &&
@@ -118,6 +164,19 @@ const recordKey = () =>
   storageKey(record.snapshot.databaseId, config.username, config.endpoint);
 const pointerKey = () =>
   `varka-workspace:last:${config.endpoint}:${String(config.username || "").toLowerCase()}`;
+function announceDelivery(id) {
+  const key = recordKey();
+  const noticeKey = `${key}:${id}`;
+  const expires = Date.now() + 10000;
+  const epoch = generation;
+  freshDeliveries.set(noticeKey, expires);
+  setTimeout(() => {
+    if (freshDeliveries.get(noticeKey) === expires)
+      freshDeliveries.delete(noticeKey);
+    if (epoch === generation && record.snapshot && recordKey() === key)
+      renderNotification();
+  }, 10000);
+}
 function enteredCache() {
   const account = $("#username").value.trim().toLowerCase(),
     endpoint = $("#endpoint").value.trim();
@@ -151,12 +210,41 @@ function persist(candidate = record) {
     throw Error("STORAGE_ERROR");
   }
 }
+function clearMessage() {
+  clearTimeout(messageTimer);
+  lastMessage = null;
+  $("#message").replaceChildren();
+  $("#message").classList.remove("error");
+}
 function flash(key, values = {}, error = false) {
+  clearTimeout(messageTimer);
   lastMessage = { key, values, error };
   const el = $("#message");
-  el.textContent = t(key, values);
+  el.replaceChildren(make("span", t(key, values)));
   el.classList.toggle("error", error);
   el.setAttribute("role", error ? "alert" : "status");
+  const transient =
+    !error &&
+    [
+      "saved",
+      "noCountsSaved",
+      "refreshed",
+      "clearDone",
+      "productSaved",
+      "productDeleted",
+      "statusDone",
+      "noteSaved",
+      "cardSaved",
+      "conflictResolved",
+    ].includes(key);
+  const dismiss = clearMessage;
+  if (transient || error) {
+    const dismissButton = button("×", dismiss, "message-dismiss");
+    dismissButton.setAttribute("aria-label", t("dismissMessage"));
+    dismissButton.title = t("dismissMessage");
+    el.append(dismissButton);
+  }
+  if (transient) messageTimer = setTimeout(dismiss, 10000);
   if (error) {
     const formError = $(".dialog-error");
     if ($("#workspace-dialog").open && formError) {
@@ -262,7 +350,7 @@ const dockContent = $("#count-bar > div");
 dockContent.classList.add("stock-dock-content");
 const countProgress = make("span");
 countProgress.id = "count-progress";
-countProgress.setAttribute("aria-hidden", "true");
+countProgress.setAttribute("role", "status");
 const dockAction = make("div");
 dockAction.id = "stock-dock-action";
 dockAction.append($("#synchronize-quantity"));
@@ -306,8 +394,19 @@ $("#workspace-dialog").addEventListener("close", () => {
     : opener?.id
       ? document.getElementById(opener.id)
       : null;
-  if (restoredOpener && !restoredOpener.disabled) restoredOpener.focus();
+  if (restoredOpener && !restoredOpener.disabled)
+    restoredOpener.focus({ preventScroll: true });
   else $("#view-heading")?.focus({ preventScroll: true });
+  const position = dialogPosition;
+  if (position && position.generation === generation && position.page === page)
+    requestAnimationFrame(() => {
+      if (
+        position.generation === generation &&
+        position.page === page &&
+        !$("#workspace-dialog").open
+      )
+        window.scrollTo({ top: position.y, left: position.x });
+    });
 });
 $("#workspace-dialog").addEventListener("keydown", (event) => {
   if (event.key !== "Tab") return;
@@ -604,16 +703,16 @@ function renderStockProducts(root) {
   chips.id = "selected-stock-filters";
   root.append(chips);
   const progressRow = make("div", undefined, "stock-progress-row");
-  const progressText = make("span", undefined, "stock-progress");
-  progressText.id = "stock-progress";
-  progressText.setAttribute("role", "status");
   const uncheckedLabel = make("label", undefined, "check unchecked-control");
   const unchecked = make("input");
   unchecked.type = "checkbox";
   unchecked.id = "stock-only-unchecked";
   unchecked.checked = Boolean(current.onlyUnchecked);
   uncheckedLabel.append(unchecked, make("span", t("onlyUnchecked")));
-  progressRow.append(progressText, uncheckedLabel);
+  const draftHelp = make("small", t("currentDraftHelp"), "draft-filter-help");
+  draftHelp.id = "current-draft-help";
+  unchecked.setAttribute("aria-describedby", draftHelp.id);
+  progressRow.append(uncheckedLabel, draftHelp);
   root.append(progressRow, tip("countHelp"));
   const result = make("p", undefined, "help filter-results");
   root.append(result);
@@ -626,12 +725,25 @@ function renderStockProducts(root) {
     for (const [key, value] of [
       ["zone", current.zone ? zoneName(current.zone) : ""],
       ["category", current.category],
+      [
+        "lastCounted",
+        current.lastCounted !== "ALL"
+          ? `${t("lastCountedFilter")}: ${dateFilterText(current)}`
+          : "",
+      ],
+      [
+        "sort",
+        current.sort !== "NAME" ? t(sortKeys[current.sort] || "sortName") : "",
+      ],
     ]) {
       if (!value) continue;
       const chip = button(
         `${value} ×`,
         () => {
-          current[key] = "";
+          if (key === "lastCounted") {
+            current.lastCounted = "ALL";
+            current.dateFrom = current.dateTo = "";
+          } else current[key] = key === "sort" ? "NAME" : "";
           list();
           filterButton.focus({ preventScroll: true });
         },
@@ -646,8 +758,8 @@ function renderStockProducts(root) {
   updateStockProgress = (applyVisibility = false) => {
     const progress = countingProgress(record.snapshot, record.drafts);
     const text = t("countProgress", progress);
-    if (progressText.textContent !== text) progressText.textContent = text;
-    $("#count-progress").textContent = text;
+    if ($("#count-progress").textContent !== text)
+      $("#count-progress").textContent = text;
     if (applyVisibility && current.onlyUnchecked) {
       const remaining = new Set(progress.uncheckedIds);
       const activeCard = document.activeElement?.closest(".product-card");
@@ -660,11 +772,18 @@ function renderStockProducts(root) {
     ).length;
     let empty = cards.querySelector(".stock-empty");
     if (!empty) {
-      empty = make(
-        "p",
-        t(all.length ? "noProducts" : "emptyCatalog"),
-        "panel stock-empty",
+      empty = make("section", undefined, "panel stock-empty");
+      empty.append(
+        make("p", t(all.length ? "noFilteredProducts" : "emptyCatalog")),
       );
+      if (all.length)
+        empty.append(
+          button(t("resetFilters"), () => {
+            Object.assign(current, stockFilterDefaults());
+            list();
+            search.focus({ preventScroll: true });
+          }),
+        );
       cards.append(empty);
     }
     empty.hidden = shown > 0;
@@ -677,10 +796,20 @@ function renderStockProducts(root) {
     const uncheckedIds = new Set(
       countingProgress(record.snapshot, record.drafts).uncheckedIds,
     );
-    const visible = filterProducts(all, current).filter(
-      (product) => !current.onlyUnchecked || uncheckedIds.has(product.id),
-    );
+    let visible = [];
+    let filterError;
+    try {
+      visible = filterProducts(all, current, {
+        timeZone: cafeTimeZone(),
+        language,
+      }).filter(
+        (product) => !current.onlyUnchecked || uncheckedIds.has(product.id),
+      );
+    } catch (error) {
+      filterError = error;
+    }
     cards.replaceChildren();
+    if (filterError) cards.append(make("p", t(errorKey(filterError)), "error"));
     const failed = (record.lastResult?.failed || []).filter(
       (item) => record.drafts[item.id]?.editVersion === item.editVersion,
     );
@@ -775,18 +904,88 @@ function openStockFilters() {
       const category = field(root, "category", current.category, {
         options: categories,
       });
+      const lastCounted = field(
+        root,
+        "lastCountedFilter",
+        current.lastCounted,
+        {
+          options: Object.entries(dateFilterKeys).map(([value, key]) => [
+            value,
+            t(key),
+          ]),
+        },
+      );
+      lastCounted.name = "lastCounted";
+      const range = make("div", undefined, "date-range-fields");
+      const dateFrom = field(range, "dateFrom", current.dateFrom, {
+        type: "date",
+      });
+      const dateTo = field(range, "dateTo", current.dateTo, { type: "date" });
+      root.append(range);
+      const updateRange = () => {
+        range.hidden = lastCounted.value !== "RANGE";
+        dateFrom.disabled = dateTo.disabled = range.hidden;
+      };
+      lastCounted.addEventListener("change", updateRange);
+      updateRange();
+      const sort = field(root, "sortProducts", current.sort, {
+        options: [
+          ["OLDEST", t("sortOldest")],
+          ["NEWEST", t("sortNewest")],
+          ["NAME", t("sortName")],
+        ],
+      });
+      sort.name = "sort";
+      root.append(
+        make("p", t("historicalDateHelp"), "help historical-date-help"),
+      );
+      root.append(
+        make("p", t("cafeTimeZone", { timeZone: cafeTimeZone() }), "help"),
+      );
+      if (!record.snapshot.timeZone)
+        root.append(make("p", t("cafeTimeZoneFallback"), "help"));
       root.append(
         button(t("resetFilters"), () => {
           location.value = "";
           category.value = "";
+          lastCounted.value = "ALL";
+          dateFrom.value = dateTo.value = "";
+          sort.value = "NAME";
+          updateRange();
           resetAll = true;
         }),
       );
-      return { location, category };
+      return { location, category, lastCounted, dateFrom, dateTo, sort };
     },
-    ({ location, category }) => {
-      current.zone = location.value;
-      current.category = category.value;
+    ({ location, category, lastCounted, dateFrom, dateTo, sort }) => {
+      const next = {
+        ...current,
+        zone: location.value,
+        category: category.value,
+        lastCounted: lastCounted.value,
+        dateFrom: dateFrom.value,
+        dateTo: dateTo.value,
+        sort: sort.value,
+      };
+      for (const field of [dateFrom, dateTo])
+        field.removeAttribute("aria-invalid");
+      try {
+        validateCountDateFilter(next);
+      } catch (error) {
+        for (const field of [dateFrom, dateTo])
+          field.setAttribute("aria-invalid", "true");
+        throw error;
+      }
+      try {
+        new Intl.DateTimeFormat(language, { timeZone: cafeTimeZone() });
+      } catch {
+        throw Error("INVALID_TIME_ZONE");
+      }
+      Object.assign(current, next);
+      if (
+        ["INVALID_DATE_RANGE", "INVALID_TIME_ZONE"].includes(lastMessage?.key)
+      )
+        clearMessage();
       if (resetAll) {
         current.search = "";
         current.onlyUnchecked = false;
@@ -997,11 +1196,8 @@ function productCard(p, conflicted) {
     );
     const recorded = make("details", undefined, "recorded-details");
     const recordedValue = make("summary", undefined, "recorded-summary");
-    recordedValue.setAttribute(
-      "aria-label",
-      `${t("recorded")}: ${quantityText(p.last)}${p.last === null || p.last === undefined ? "" : ` ${t(`unitShort_${p.unit}`)}`} · ${t("countedAt")}: ${dateText(p.lastCountedAt)}`,
-    );
-    recordedValue.append(
+    const previousBalance = make("span", undefined, "previous-balance");
+    previousBalance.append(
       make("span", t("recordedShort")),
       make(
         "strong",
@@ -1010,18 +1206,24 @@ function productCard(p, conflicted) {
     );
     const counted = make(
       "time",
-      p.lastCountedAt && Number.isFinite(Date.parse(p.lastCountedAt))
-        ? new Intl.DateTimeFormat(language, {
-            day: "numeric",
-            month: "short",
-          }).format(new Date(p.lastCountedAt))
-        : "",
+      p.lastCountedAt ? dateText(p.lastCountedAt, true) : "",
       "recorded-time",
     );
     counted.title = `${t("countedAt")}: ${dateText(p.lastCountedAt)}`;
     counted.setAttribute("aria-label", counted.title);
     if (p.lastCountedAt) counted.dateTime = p.lastCountedAt;
-    recordedValue.append(counted);
+    previousBalance.append(counted);
+    const countTimeAction = make(
+      "span",
+      t("showCountTime"),
+      "disclosure-label",
+    );
+    recordedValue.append(previousBalance, countTimeAction);
+    recorded.addEventListener("toggle", () => {
+      countTimeAction.textContent = t(
+        recorded.open ? "hideCountTime" : "showCountTime",
+      );
+    });
     recorded.append(
       recordedValue,
       make("p", `${t("countedAt")}: ${dateText(p.lastCountedAt)}`, "help"),
@@ -1031,20 +1233,20 @@ function productCard(p, conflicted) {
       d = record.drafts[p.id];
     const zones = d?.zones || p.zones || [],
       expected = zones.length ? zones : ["unassigned"];
+    if (expected.length === 1) inputs.classList.add("single-location");
     for (const id of expected) {
       const label = make("label", undefined, "quantity-label"),
         input = make("input");
       label.append(
         make(
           "span",
-          `${["fridge", "freezer", "wardrobe", "cabinet", "shelf", "pickup"].includes(id) ? t(`zoneShort_${id}`) : zoneName(id)}, ${t(`unitShort_${p.unit}`)}`,
+          `${zoneName(id)}, ${t(`unitShort_${p.unit}`)}`,
           "quantity-caption",
         ),
       );
       label.title = `${zoneName(id)}, ${t(p.unit)}`;
       input.type = "text";
-      input.className = "quantity-input-square";
-      input.size = 3;
+      input.className = "quantity-input";
       input.setAttribute(
         "aria-label",
         `${t("quantity")} · ${zoneName(id)} (${t(p.unit)})`,
@@ -1073,12 +1275,21 @@ function productCard(p, conflicted) {
     const updateCountFeedback = () => {
       const state = draftState(p, record.drafts[p.id]);
       card.classList.toggle("draft-complete", state.complete && !conflicted);
+      const entered = expected.filter(
+        (id) =>
+          String(record.drafts[p.id]?.locations?.[id]?.value ?? "").trim() !==
+          "",
+      ).length;
+      countFeedback.classList.toggle(
+        "error",
+        Boolean(state.error && state.error !== "INCOMPLETE_LOCATIONS"),
+      );
       countFeedback.textContent = state.complete
-        ? `${conflicted ? t("review") : `✓ ${t("draftEntered")}`} · ${t("total")}: ${quantityText(state.totalValue)} ${t(`unitShort_${p.unit}`)}`
-        : state.entered
-          ? t("partialDraft")
-          : !record.drafts[p.id] && p.lastCountedAt
-            ? t("saved")
+        ? `${conflicted ? `${t("draftEntered")} · ${t("review")}` : `✓ ${t("draftEntered")}`} · ${t("localTotal")}: ${quantityText(state.totalValue)} ${t(`unitShort_${p.unit}`)}`
+        : entered > 0 && entered < expected.length
+          ? t("draftPartialLocations", { entered, total: expected.length })
+          : state.entered
+            ? t(state.error || "draftInvalid")
             : "";
     };
     for (const input of inputs.querySelectorAll("input")) {
@@ -1087,7 +1298,7 @@ function productCard(p, conflicted) {
       error.id = `quantity-error-${p.id}-${input.dataset.zone}`;
       input.setAttribute("aria-describedby", error.id);
       input.parentElement.append(error);
-      input.addEventListener("input", () => {
+      const validateField = () => {
         error.textContent = "";
         try {
           if (input.value.trim()) quantityInput(input.value, d?.unit || p.unit);
@@ -1097,7 +1308,9 @@ function productCard(p, conflicted) {
           input.setAttribute("aria-invalid", "true");
         }
         updateCountFeedback();
-      });
+      };
+      input.addEventListener("input", validateField);
+      validateField();
       input.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || event.isComposing) return;
         event.preventDefault();
@@ -1114,7 +1327,17 @@ function productCard(p, conflicted) {
     additional.open = stockDetails.get(detailKey) === true;
     const summary = make("summary");
     const indicator = make("span", undefined, "additional-indicator");
-    summary.append(make("span", t("additional")), indicator);
+    const additionalAction = make(
+      "span",
+      t(additional.open ? "hideAdditional" : "showAdditional"),
+      "disclosure-label",
+    );
+    summary.append(additionalAction, indicator);
+    additional.addEventListener("toggle", () => {
+      additionalAction.textContent = t(
+        additional.open ? "hideAdditional" : "showAdditional",
+      );
+    });
     summary.addEventListener("click", () =>
       stockDetails.set(detailKey, !additional.open),
     );
@@ -1238,6 +1461,7 @@ function modal(title, build, onSubmit, submitLabel = "save") {
   const dialog = $("#workspace-dialog"),
     form = $("#dialog-form");
   opener = document.activeElement;
+  dialogPosition = { generation, page, y: window.scrollY, x: window.scrollX };
   dialog.classList.remove("bottom-sheet", "recount-menu-dialog");
   delete dialog.dataset.kind;
   form.replaceChildren();
@@ -1455,10 +1679,15 @@ async function submitCount() {
     }
     persist(candidate);
     record = candidate;
+    if (record.notification.status === "SENT") announceDelivery(request.id);
     snapshotEpoch++;
     render();
     flash(
-      result.failed?.length || result.conflicted?.length ? "partial" : "saved",
+      result.failed?.length || result.conflicted?.length
+        ? "partial"
+        : result.accepted?.length
+          ? "saved"
+          : "noCountsSaved",
       {},
       Boolean(result.failed?.length || result.conflicted?.length),
     );
@@ -1493,6 +1722,8 @@ async function notify(id = record.notification?.id, checkOnly = false) {
     if (!result) return;
     record.notifications ||= {};
     record.notifications[id] = { ...result, id };
+    if (result.status === "SENT" && current.status !== "SENT")
+      announceDelivery(id);
     if (record.notification?.id === id)
       record.notification = record.notifications[id];
     persist();
@@ -1522,7 +1753,11 @@ function renderNotification() {
     (n) =>
       (n.id === record.notification?.id ||
         ["READY", "FAILED", "UNKNOWN"].includes(n.status)) &&
-      !(n.status === "SENT" && record.dismissedNotifications?.[n.id]),
+      !(
+        n.status === "SENT" &&
+        (record.dismissedNotifications?.[n.id] ||
+          (freshDeliveries.get(`${recordKey()}:${n.id}`) || 0) <= Date.now())
+      ),
   );
   panel.hidden = !list.length;
   panel.classList.toggle(
@@ -2321,6 +2556,10 @@ window.addEventListener("online", () => {
 });
 window.addEventListener("offline", () => {
   controls();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && record.snapshot)
+    renderNotification();
 });
 let fullViewportHeight = window.innerHeight;
 function keyboardLayout() {

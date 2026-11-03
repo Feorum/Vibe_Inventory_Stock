@@ -313,6 +313,54 @@ test("workspace login delegates existing secrets, auth guards every method, miss
     false,
   );
 });
+test("workspace exposes the configured café timezone without adding or changing inventory dates", () => {
+  const db = database();
+  const original = copy([...db.sheets.values()].map((sheet) => sheet.values));
+  assert.equal(db.load().timeZone, "Europe/Minsk");
+  db.properties.set("CAFE_TIMEZONE", "America/New_York");
+  const loaded = db.load();
+  assert.equal(loaded.timeZone, "America/New_York");
+  assert.ok(loaded.products.every((product) => product.lastCountedAt === null));
+  assert.deepEqual(
+    copy([...db.sheets.values()].map((sheet) => sheet.values)),
+    original,
+  );
+});
+test("historical count dates change only for acknowledged products, not failed counts, edits, refreshes or Telegram", () => {
+  const oldDate = "2020-01-01T12:00:00.000Z";
+  const db = database({
+    baseline: {
+      P001: { q: 3, checked: oldDate, quality: "EXACT", low: false },
+      P002: { q: 4, checked: oldDate, quality: "EXACT", low: false },
+    },
+  });
+  const original = db.load().products;
+  const result = db.call(
+    "workspaceCount",
+    db.countRequest([db.item(original[0], "0"), db.item(original[1], "-1")]),
+  );
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.failed.length, 1);
+  const saved = db.load().products;
+  assert.notEqual(saved[0].lastCountedAt, oldDate);
+  assert.equal(saved[0].lastCountedAt, result.accepted[0].lastCountedAt);
+  assert.equal(saved[1].lastCountedAt, oldDate);
+  assert.equal(saved[0].lastLocations.length, 2);
+  assert.ok(
+    saved[0].lastLocations.every(
+      (location) => !Object.hasOwn(location, "lastCountedAt"),
+    ),
+  );
+  db.call("workspaceCatalog", {
+    id: randomUUID(),
+    action: "save",
+    product: { ...saved[0], ru: "Renamed", minimum: 9 },
+  });
+  db.call("workspaceNotify", { id: result.id }); // Not configured: no HTTP call.
+  const refreshed = db.load().products;
+  assert.equal(refreshed[0].lastCountedAt, saved[0].lastCountedAt);
+  assert.equal(refreshed[1].lastCountedAt, oldDate);
+});
 test("zero, comma decimals and flags save only explicitly completed zone counts", () => {
   const db = database(),
     products = db.load().products,

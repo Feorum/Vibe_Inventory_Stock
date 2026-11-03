@@ -40,6 +40,12 @@ async function mockWorkspace(
     ...extra,
   });
   const backend = {
+    timeZone: "Europe/Minsk",
+    serverNow: new Date().toISOString(),
+    zones: [
+      { id: "fridge", ru: "Холодильник", en: "Refrigerator" },
+      { id: "shelf", ru: "Полка", en: "Shelf" },
+    ],
     databaseId: "safe-workspace-test-database",
     products: [
       product("P001", "Молоко", "Milk", { zones: ["fridge", "shelf"] }),
@@ -114,11 +120,9 @@ async function mockWorkspace(
   const snapshot = () =>
     structuredClone({
       databaseId: backend.databaseId,
+      timeZone: backend.timeZone,
       products: backend.products,
-      zones: [
-        { id: "fridge", ru: "Холодильник", en: "Refrigerator" },
-        { id: "shelf", ru: "Полка", en: "Shelf" },
-      ],
+      zones: backend.zones,
       categories: backend.categories,
       notes: backend.notes,
       cards: backend.cards,
@@ -211,7 +215,7 @@ async function mockWorkspace(
             0,
           );
           current.stockVersion = `${current.id}-stock-${backend.saves + 2}`;
-          current.lastCountedAt = new Date().toISOString();
+          current.lastCountedAt = backend.serverNow;
           current.approx = item.approx;
           current.low = item.low;
           data.accepted.push({
@@ -1002,7 +1006,7 @@ test("Team adds shared notes and schema-valid Yellow Cards, keeps failed fields,
   await form.locator('[name="cardName"]').fill("New A card");
   await form.locator('[name="cardCategory"]').fill("A");
   await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.locator("#message")).toHaveText("Yellow Card saved.");
+  await expect(page.locator("#message")).toContainText("Yellow Card saved.");
   await expect(page.getByText(/New A card/)).toBeVisible();
   for (const section of ["A", "C", "D"])
     await expect(
@@ -1191,10 +1195,23 @@ test("normal-flow search and a compact fixed save bar leave the header out of th
     "Сохранить пересчёт",
   );
   await page.evaluate(() => (document.documentElement.style.zoom = "2"));
+  const overflow = await page.evaluate(() =>
+    [...document.querySelectorAll("body *")]
+      .map((element) => ({
+        tag: element.tagName,
+        id: element.id,
+        className: element.className,
+        right: element.getBoundingClientRect().right,
+        width: element.getBoundingClientRect().width,
+      }))
+      .filter((element) => element.right > innerWidth + 1)
+      .slice(0, 12),
+  );
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
+    JSON.stringify(overflow),
   ).toBe(true);
   for (const field of await page
     .locator("#count-bar input, #count-bar select, #synchronize-quantity")
@@ -1208,7 +1225,7 @@ test("normal-flow search and a compact fixed save bar leave the header out of th
   expect(backend.saves).toBe(0);
 });
 
-test("square quantity boxes preserve zero, three digits, and larger decimal drafts across refresh and reload", async ({
+test("full-width tappable quantity fields preserve zero and larger decimal drafts across refresh and reload", async ({
   page,
 }) => {
   const backend = await mockWorkspace(page);
@@ -1218,8 +1235,14 @@ test("square quantity boxes preserve zero, three digits, and larger decimal draf
   for (const input of await page.locator(".product-card [data-zone]").all()) {
     const bounds = await input.boundingBox();
     expect(bounds.width).toBeGreaterThanOrEqual(44);
-    expect(bounds.width).toBeLessThanOrEqual(64);
-    expect(Math.abs(bounds.width - bounds.height)).toBeLessThanOrEqual(1);
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    const parent = await input.locator("..").boundingBox();
+    expect(Math.abs(parent.width - bounds.width)).toBeLessThanOrEqual(2);
+    expect(
+      await input.evaluate((element) =>
+        parseFloat(getComputedStyle(element).fontSize),
+      ),
+    ).toBeGreaterThanOrEqual(16);
     expect(await input.evaluate((element) => element.maxLength)).toBe(-1);
     await expect(input).toHaveAttribute("inputmode", "decimal");
   }
@@ -1701,7 +1724,7 @@ test("unchecked progress preserves typing focus, distinguishes zero and incomple
   const backend = await mockWorkspace(page);
   await page.goto(appPath);
   await login(page);
-  await expect(page.locator("#stock-progress")).toHaveText("0 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("0 of 3 ready");
   await openAdditional(page, "P002");
   await card(page, "P002").getByLabel("Low", { exact: true }).check();
   await expect(
@@ -1711,9 +1734,9 @@ test("unchecked progress preserves typing focus, distinguishes zero and incomple
   const first = card(page, "P001").locator('[data-zone="fridge"]');
   const second = card(page, "P001").locator('[data-zone="shelf"]');
   await first.fill("0");
-  await expect(page.locator("#stock-progress")).toHaveText("0 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("0 of 3 ready");
   await second.fill("0");
-  await expect(page.locator("#stock-progress")).toHaveText("1 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("1 of 3 ready");
   await expect(second).toBeFocused();
   await second.pressSequentially("123");
   await expect(second).toHaveValue("0123");
@@ -1727,9 +1750,9 @@ test("unchecked progress preserves typing focus, distinguishes zero and incomple
   const cups = card(page, "P003").locator('[data-zone="shelf"]');
   await cups.fill("-1");
   await expect(coffee).not.toBeVisible();
-  await expect(page.locator("#stock-progress")).toHaveText("2 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("2 of 3 ready");
   await cups.fill("0.5");
-  await expect(page.locator("#stock-progress")).toHaveText("2 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("2 of 3 ready");
   await cups.fill("");
   await page.getByLabel("Search products", { exact: true }).fill("cups");
   await openConfirmation(page);
@@ -1883,7 +1906,7 @@ test("count feedback distinguishes partial drafts, shows totals and local errors
   const shelf = milk.locator('[data-zone="shelf"]');
   await fridge.fill("1,25");
   await expect(milk.locator(".count-feedback")).toContainText(
-    "Partially entered",
+    "Filled 1 of 2 locations",
   );
   await expect(milk).not.toHaveClass(/draft-complete/);
   await expect(fridge).toHaveAttribute("enterkeyhint", "next");
@@ -1898,9 +1921,7 @@ test("count feedback distinguishes partial drafts, shows totals and local errors
   await shelf.fill("2.25");
   await expect(shelf).not.toHaveAttribute("aria-invalid", "true");
   await expect(milk).toHaveClass(/draft-complete/);
-  await expect(milk.locator(".count-feedback")).toContainText(
-    "Entered in draft",
-  );
+  await expect(milk.locator(".count-feedback")).toContainText("In draft");
   await expect(milk.locator(".count-feedback")).toContainText("3.5 l");
   await page.locator('[data-view="catalog"]').click();
   await page.locator('[data-view="stock"]').click();
@@ -1911,4 +1932,518 @@ test("count feedback distinguishes partial drafts, shows totals and local errors
     "Entered 1 of 3 products. The rest will remain unchanged.",
   );
   expect(backend.saves).toBe(0);
+});
+
+test("capture reproducible mobile comparison screenshots", async ({
+  page,
+}, testInfo) => {
+  const phase = process.env.VARKA_CAPTURE_PHASE;
+  test.skip(
+    !["before", "after"].includes(phase) || testInfo.project.name !== "desktop",
+    "Opt-in mobile comparison artifacts",
+  );
+  await page.clock.setFixedTime(new Date("2026-11-03T12:00:00.000Z"));
+  await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .locator("#workspace")
+    .getByRole("combobox", { name: "Language", exact: true })
+    .selectOption("ru");
+  await page.locator('[data-view="stock"]').click();
+  for (const width of [360, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({
+      path: `artifacts/mobile-v44/${phase}-${width}.png`,
+    });
+    if (phase === "after") {
+      await page.evaluate(
+        () => (document.documentElement.style.fontSize = "24px"),
+      );
+      await page.screenshot({
+        path: `artifacts/mobile-v44/after-${width}-large-text.png`,
+      });
+      await page.evaluate(() => (document.documentElement.style.fontSize = ""));
+    }
+  }
+  if (phase === "after") {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await enterMilk(page, "1,25", "2.25");
+    await page.locator("#view-heading").focus();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: "artifacts/mobile-v44/after-390-draft.png" });
+    await card(page, "P001").locator('[data-zone="fridge"]').focus();
+    await page.setViewportSize({ width: 390, height: 400 });
+    await expect(page.locator("#count-bar")).not.toBeVisible();
+    await page.screenshot({
+      path: "artifacts/mobile-v44/after-390-keyboard.png",
+    });
+  }
+});
+
+async function historicalFilters(page, options = {}) {
+  await page.locator("#stock-filter-button").click();
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await expect(
+    sheet.getByText(/Saved count dates are recorded per product/),
+  ).toBeVisible();
+  for (const key of ["lastCounted", "sort"])
+    if (options[key] !== undefined)
+      await sheet.locator(`[name="${key}"]`).selectOption(options[key]);
+  for (const key of ["dateFrom", "dateTo"])
+    if (options[key] !== undefined)
+      await sheet.locator(`[name="${key}"]`).fill(options[key]);
+  await sheet.locator('button[type="submit"]').click();
+  await expect(sheet).not.toBeVisible();
+}
+const visibleStockIds = (page) =>
+  page
+    .locator(".stock-product-list .product-card:visible")
+    .evaluateAll((cards) => cards.map((element) => element.dataset.productId));
+function historicalFixture(backend) {
+  backend.timeZone = "Europe/Minsk";
+  backend.serverNow = "2026-11-03T00:15:00.000Z";
+  backend.products[0].lastCountedAt = "2026-11-02T22:30:00.000Z"; // Nov 3 in café, Nov 2 in UTC.
+  backend.products[1].lastCountedAt = "2026-11-02T20:59:00.000Z";
+  backend.products[2].lastCountedAt = null;
+  const original = backend.products[1];
+  for (const [id, name, date] of [
+    ["P004", "Delta", "2026-10-27T21:30:00.000Z"], // Oct 28 local: 6 days, not 7.
+    ["P005", "Echo", "2026-10-26T21:30:00.000Z"], // Oct 27 local: 7 days.
+    ["P006", "Foxtrot", "2026-10-03T22:00:00.000Z"], // Oct 4 local: 30 days.
+    ["P007", "Golf", "2026-10-03T20:00:00.000Z"], // Oct 3 local: 31 days.
+  ])
+    backend.products.push({
+      ...original,
+      id,
+      en: name,
+      ru: name,
+      stockVersion: `${id}-stock-1`,
+      countVersion: `${id}-count-1`,
+      catalogVersion: `${id}-catalog-1`,
+      lastCountedAt: date,
+    });
+}
+
+test("saved count date filters use café calendar days, missing dates, inclusive ranges and stable sorting", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(new Date("2026-11-03T00:15:00.000Z"));
+  const backend = await mockWorkspace(page);
+  historicalFixture(backend);
+  await page.goto(appPath);
+  await login(page);
+  await historicalFilters(page, { lastCounted: "TODAY" });
+  expect(await visibleStockIds(page)).toEqual(["P001"]);
+  await expect(page.locator("#selected-stock-filters")).toContainText("Today");
+  await page
+    .locator('#selected-stock-filters [data-filter="lastCounted"]')
+    .click();
+  await expect(page.locator(".product-card")).toHaveCount(7);
+  await historicalFilters(page, { lastCounted: "YESTERDAY" });
+  expect(await visibleStockIds(page)).toEqual(["P002"]);
+  await historicalFilters(page, { lastCounted: "DAYS_7" });
+  expect((await visibleStockIds(page)).sort()).toEqual([
+    "P005",
+    "P006",
+    "P007",
+  ]);
+  await historicalFilters(page, { lastCounted: "DAYS_30" });
+  expect((await visibleStockIds(page)).sort()).toEqual(["P006", "P007"]);
+  await historicalFilters(page, { lastCounted: "NEVER" });
+  expect(await visibleStockIds(page)).toEqual(["P003"]);
+  await historicalFilters(page, {
+    lastCounted: "RANGE",
+    dateFrom: "2026-10-27",
+    dateTo: "2026-10-28",
+  });
+  expect((await visibleStockIds(page)).sort()).toEqual(["P004", "P005"]);
+  await page.locator("#stock-filter-button").click();
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await sheet.locator('[name="dateFrom"]').fill("2026-11-03");
+  await sheet.locator('[name="dateTo"]').fill("2026-11-02");
+  await sheet.locator('button[type="submit"]').click();
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator(".dialog-error")).not.toHaveText("");
+  await expect(sheet.locator('[name="dateFrom"]')).toHaveValue("2026-11-03");
+  await page.keyboard.press("Escape");
+  expect((await visibleStockIds(page)).sort()).toEqual(["P004", "P005"]);
+  await historicalFilters(page, { lastCounted: "ALL", sort: "OLDEST" });
+  expect(await visibleStockIds(page)).toEqual([
+    "P003",
+    "P007",
+    "P006",
+    "P005",
+    "P004",
+    "P002",
+    "P001",
+  ]);
+  await historicalFilters(page, { sort: "NEWEST" });
+  expect(await visibleStockIds(page)).toEqual([
+    "P001",
+    "P002",
+    "P004",
+    "P005",
+    "P006",
+    "P007",
+    "P003",
+  ]);
+  await historicalFilters(page, { sort: "NAME" });
+  expect(await visibleStockIds(page)).toEqual([
+    "P002",
+    "P003",
+    "P004",
+    "P005",
+    "P006",
+    "P007",
+    "P001",
+  ]);
+  await historicalFilters(page, { lastCounted: "TODAY" });
+  await applyStockFilters(page, { zone: "shelf", category: "Dairy" });
+  await page.getByLabel("Search products", { exact: true }).fill("milk");
+  expect(await visibleStockIds(page)).toEqual(["P001"]);
+  await page.locator('[data-view="profile"]').click();
+  await page.locator('[data-view="stock"]').click();
+  await expect(page.getByLabel("Search products", { exact: true })).toHaveValue(
+    "milk",
+  );
+  await expect(page.locator("#selected-stock-filters")).toContainText("Today");
+  await historicalFilters(page, { lastCounted: "NEVER" });
+  await expect(page.locator(".stock-empty")).toContainText(/filter/i);
+  const emptyReset = page
+    .locator(".stock-empty")
+    .getByRole("button", { name: "Reset filters", exact: true });
+  await emptyReset.click();
+  await expect(page.locator(".product-card")).toHaveCount(7);
+  await expect(page.locator("#selected-stock-filters")).toBeHidden();
+  expect(backend.saves).toBe(0);
+});
+
+test("historical filters never change draft scope or dates; only accepted counts advance saved dates", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(new Date("2026-11-03T00:15:00.000Z"));
+  const backend = await mockWorkspace(page);
+  historicalFixture(backend);
+  backend.notificationFail = true;
+  const initialDates = Object.fromEntries(
+    backend.products.map((product) => [product.id, product.lastCountedAt]),
+  );
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "1,25", "0");
+  await card(page, "P005").locator('[data-zone="shelf"]').fill("0");
+  await expect(page.locator("#count-progress")).toHaveText("2 of 7 ready");
+  await historicalFilters(page, { lastCounted: "TODAY" });
+  expect(await visibleStockIds(page)).toEqual(["P001"]);
+  expect(
+    Object.fromEntries(
+      backend.products.map((product) => [product.id, product.lastCountedAt]),
+    ),
+  ).toEqual(initialDates);
+  await page.locator("#refresh").click();
+  await expect(page.locator("#refresh")).not.toBeDisabled();
+  expect(await visibleStockIds(page)).toEqual(["P001"]);
+  await expect(page.locator("#count-progress")).toHaveText("2 of 7 ready");
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(2);
+  const submitted = backend.requests.find(
+    (request) => request.method === "workspaceCount",
+  ).body;
+  expect(submitted.items.map((item) => item.id).sort()).toEqual([
+    "P001",
+    "P005",
+  ]);
+  await expect(page.locator("#notification-panel")).toContainText(
+    "Telegram failed",
+  );
+  expect(
+    backend.products.find((product) => product.id === "P001").lastCountedAt,
+  ).toBe(backend.serverNow);
+  expect(
+    backend.products.find((product) => product.id === "P005").lastCountedAt,
+  ).toBe(backend.serverNow);
+  for (const product of backend.products.filter(
+    (product) => !["P001", "P005"].includes(product.id),
+  ))
+    expect(product.lastCountedAt).toBe(initialDates[product.id]);
+  expect((await visibleStockIds(page)).sort()).toEqual(["P001", "P005"]);
+  await expect(page.locator(".stock-product-list")).not.toContainText(
+    "Inventory saved",
+  );
+  backend.notificationFail = false;
+  await page
+    .getByRole("button", { name: "Retry notification only", exact: true })
+    .click();
+  await expect.poll(() => backend.telegramSends).toBe(1);
+  for (const product of backend.products.filter(
+    (product) => !["P001", "P005"].includes(product.id),
+  ))
+    expect(product.lastCountedAt).toBe(initialDates[product.id]);
+  expect(backend.saves).toBe(2);
+});
+
+test("mobile cards fit 360, 390 and 430 pixels in both languages with enlarged text and keyboard clearance", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  const backend = await mockWorkspace(page);
+  backend.products[0].en =
+    "Long product name for refrigerated café milk and plant-based ingredients";
+  backend.products[0].ru =
+    "Очень длинное название молока и растительных ингредиентов для кофейни";
+  backend.zones[0].en = "Refrigerator with a long storage location name";
+  backend.zones[0].ru = "Холодильник с длинным названием места хранения";
+  await page.setViewportSize({ width: 430, height: 844 });
+  await page.goto(appPath);
+  await login(page);
+  await expect(page.locator(".stock-product-list")).not.toContainText(
+    "Inventory saved",
+  );
+  await expect(page.locator("#stock-progress")).toHaveCount(0);
+  await expect(page.locator("#count-progress")).not.toHaveAttribute(
+    "aria-hidden",
+    "true",
+  );
+  const assertLayout = async () => {
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    const singleInput = await card(page, "P002")
+      .locator("input[data-zone]")
+      .boundingBox();
+    const singleGrid = await card(page, "P002")
+      .locator(".quantity-grid")
+      .boundingBox();
+    expect(Math.abs(singleInput.width - singleGrid.width)).toBeLessThanOrEqual(
+      1,
+    );
+    for (const input of await page
+      .locator(".stock-product-list input[data-zone]")
+      .all()) {
+      const bounds = await input.boundingBox();
+      expect(bounds.height).toBeGreaterThanOrEqual(44);
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(
+        page.viewportSize().width + 1,
+      );
+      expect(
+        await input.evaluate((element) =>
+          parseFloat(getComputedStyle(element).fontSize),
+        ),
+      ).toBeGreaterThanOrEqual(16);
+      const caption = await input
+        .locator("..")
+        .locator(".quantity-caption")
+        .boundingBox();
+      expect(caption.y + caption.height).toBeLessThanOrEqual(bounds.y + 1);
+    }
+  };
+  for (const language of ["en", "ru"]) {
+    if (language === "ru") {
+      await page.locator('[data-view="profile"]').click();
+      await page
+        .locator("#workspace")
+        .getByRole("combobox", { name: "Language", exact: true })
+        .selectOption("ru");
+      await page.locator('[data-view="stock"]').click();
+    }
+    for (const width of [360, 390, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await assertLayout();
+      if (width === 430) {
+        const fields = await card(page, "P001")
+          .locator("input[data-zone]")
+          .all();
+        const [first, second] = await Promise.all(
+          fields.map((input) => input.boundingBox()),
+        );
+        expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(1);
+        expect(Math.abs(first.width - second.width)).toBeLessThanOrEqual(1);
+      }
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "24px";
+      });
+      await assertLayout();
+      const fields = await card(page, "P001").locator("input[data-zone]").all();
+      const [first, second] = await Promise.all(
+        fields.map((input) => input.boundingBox()),
+      );
+      expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+      expect(Math.abs(first.x - second.x)).toBeLessThanOrEqual(1);
+      await page.screenshot({
+        path: test
+          .info()
+          .outputPath(`mobile-${width}-${language}-large-text.png`),
+      });
+      if (width !== 430) {
+        await page.locator("#stock-filter-button").click();
+        const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+        await sheet.locator('[name="lastCounted"]').selectOption("RANGE");
+        await sheet.locator('[name="dateFrom"]').fill("2026-10-01");
+        await sheet.locator('[name="dateTo"]').fill("2026-11-03");
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        for (const field of await sheet.locator("input,select,button").all()) {
+          if (!(await field.isVisible())) continue;
+          const bounds = await field.boundingBox();
+          expect(bounds.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+        }
+        await sheet.locator('button[type="submit"]').scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: test
+            .info()
+            .outputPath(`mobile-${width}-${language}-large-date-sheet.png`),
+        });
+        await page.keyboard.press("Escape");
+      }
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "";
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      });
+      const last = card(page, "P003");
+      await expect
+        .poll(async () => {
+          await page.evaluate(() =>
+            window.scrollTo(0, document.documentElement.scrollHeight),
+          );
+          const lastBounds = await last.boundingBox();
+          const barBounds = await page.locator("#count-bar").boundingBox();
+          return lastBounds.y + lastBounds.height <= barBounds.y + 2;
+        })
+        .toBe(true);
+    }
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const firstInput = card(page, "P001").locator('[data-zone="fridge"]');
+  await firstInput.fill("1,25");
+  await page.setViewportSize({ width: 390, height: 400 });
+  await expect(firstInput).toBeFocused();
+  await expect(page.locator("#count-bar")).not.toBeVisible();
+  await expect(page.locator("#navigation")).not.toBeVisible();
+  await expect
+    .poll(async () => {
+      const bounds = await firstInput.boundingBox();
+      return bounds.y >= 0 && bounds.y + bounds.height <= 400;
+    })
+    .toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath("mobile-keyboard-390-ru.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await firstInput.evaluate((element) => element.blur());
+  const report = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(
+    report.violations.map((violation) => ({
+      id: violation.id,
+      targets: violation.nodes.map((node) => node.target),
+    })),
+  ).toEqual([]);
+  expect(backend.saves).toBe(0);
+});
+
+test("navigation and filter dialogs retain counting scroll and invalid local draft values", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  const sample = backend.products[1];
+  backend.products.push(
+    ...Array.from({ length: 25 }, (_, index) => ({
+      ...sample,
+      id: `SCROLL${index}`,
+      en: `Scroll product ${String(index).padStart(2, "0")}`,
+      ru: `Товар ${index}`,
+    })),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(appPath);
+  await login(page);
+  const draft = card(page, "SCROLL10").locator('[data-zone="shelf"]');
+  await draft.fill("-2");
+  await draft.evaluate((element) => element.blur());
+  await page.evaluate(() => window.scrollTo(0, 1400));
+  const position = await page.evaluate(() => window.scrollY);
+  await page.locator('[data-view="catalog"]').click();
+  await page.locator('[data-view="stock"]').click();
+  await expect
+    .poll(() => page.evaluate(() => Math.abs(window.scrollY - 1400)))
+    .toBeLessThan(5);
+  await expect(draft).toHaveValue("-2");
+  await expect(draft).toHaveAttribute("aria-invalid", "true");
+  await expect(draft.locator("..").locator(".field-error")).not.toHaveText("");
+  await page
+    .locator("#stock-filter-button")
+    .evaluate((element) => element.click());
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (expected) => Math.abs(window.scrollY - expected),
+        position,
+      ),
+    )
+    .toBeLessThan(5);
+  await page
+    .locator("#stock-filter-button")
+    .evaluate((element) => element.click());
+  await sheet.locator('button[type="submit"]').click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (expected) => Math.abs(window.scrollY - expected),
+        position,
+      ),
+    )
+    .toBeLessThan(5);
+  await expect(draft).toHaveValue("-2");
+  expect(backend.saves).toBe(0);
+});
+
+test("old successes do not survive reload or linger, but failed Telegram delivery remains actionable", async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date("2026-11-03T12:00:00.000Z") });
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "1", "0");
+  await send(page);
+  await expect(page.locator("#notification-panel")).toContainText(
+    "Telegram notification sent.",
+  );
+  await page.reload();
+  await login(page);
+  await expect(page.locator("#notification-panel")).not.toBeVisible();
+  await enterMilk(page, "2", "0");
+  await send(page);
+  await expect(page.locator("#notification-panel")).toContainText(
+    "Telegram notification sent.",
+  );
+  await page.clock.fastForward(11000);
+  await expect(page.locator("#notification-panel")).not.toBeVisible();
+  await expect(page.locator("#message")).toHaveText("");
+  backend.notificationFail = true;
+  await enterMilk(page, "3", "0");
+  await send(page);
+  await expect(page.locator("#notification-panel")).toContainText(
+    "Telegram failed",
+  );
+  await page.clock.fastForward(11000);
+  await expect(
+    page.getByRole("button", { name: "Retry notification only", exact: true }),
+  ).toBeVisible();
+  expect(backend.saves).toBe(3);
 });
