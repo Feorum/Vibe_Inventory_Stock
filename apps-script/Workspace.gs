@@ -215,10 +215,44 @@ function workspaceStockVersion_(id, events, state) {
     s.note || "",
   ]);
 }
+// Unit changes commit their catalog snapshot and recount in one authoritative
+// Events envelope. Physical Products rows are only a recoverable materialization.
+function workspaceProductRows_() {
+  const products = rows_("Products").map((row) => row.slice());
+  const latest = new Map();
+  workspaceRows_("Events").forEach((row) => {
+    const change = v5Decode_(row)?.workspaceUnitChange;
+    if (change?.after?.[0]) latest.set(change.after[0], change);
+  });
+  for (const [id, change] of latest) {
+    const index = products.findIndex((row) => row[0] === id);
+    if (index < 0) throw Error("CATALOG_RECOVERY_CONFLICT");
+    const current = products[index];
+    if (workspaceMetadata_(current) === workspaceMetadata_(change.before))
+      products[index] = change.after.slice();
+    else if (current[4] !== change.after[4])
+      throw Error("CATALOG_RECOVERY_CONFLICT");
+  }
+  return products;
+}
+function workspaceMaterializeUnitChanges_() {
+  const sheet = book_().getSheetByName("Products");
+  const raw = sheet.getDataRange().getValues();
+  for (const product of workspaceProductRows_()) {
+    const index = raw.findIndex((row, i) => i > 0 && row[0] === product[0]);
+    if (
+      index > 0 &&
+      workspaceMetadata_(raw[index]) !== workspaceMetadata_(product)
+    )
+      sheet.getRange(index + 1, 1, 1, 15).setValues([product]);
+  }
+  SpreadsheetApp.flush();
+}
 function workspaceProducts_() {
-  const products = rows_("Products"),
+  const products = workspaceProductRows_(),
     events = rows_("Events"),
-    state = totalState_(events, baselines_());
+    baselines = baselines_(),
+    state = totalState_(events, baselines);
   const batches = workspaceRows_("Events")
     .map((r) => v5Decode_(r))
     .filter(Boolean);
@@ -248,6 +282,9 @@ function workspaceProducts_() {
         en: p[2] || "",
         category: p[3],
         unit: p[4],
+        hasStockHistory:
+          events.some((event) => event[3] === p[0]) ||
+          baselines[p[0]]?.q != null,
         sleeve: p[4] === "pcs" && Number(p[5]) === 25,
         zones: v8ProductZones_(p),
         active: p[6] === "YES",
@@ -271,6 +308,16 @@ function workspaceProducts_() {
           null,
         approx: current.quality === "ESTIMATED",
         low: !!current.low,
+        expirationWarning:
+          batches
+            .slice()
+            .reverse()
+            .flatMap((batch) => batch.countMetadata || [])
+            .find(
+              (item) =>
+                item.productId === p[0] &&
+                typeof item.expirationWarning === "boolean",
+            )?.expirationWarning || false,
       };
     });
 }
@@ -309,6 +356,11 @@ function workspaceLoad_(email) {
       databaseId: book_().getId(),
       loadedAt: new Date().toISOString(),
       timeZone: prop_().getProperty("CAFE_TIMEZONE") || "Europe/Minsk",
+      features: {
+        unitRecount: true,
+        fractionalPieces: true,
+        expirationWarning: true,
+      },
       products: products,
       zones: v8Zones_(),
       categories: [...new Set(products.map((p) => p.category))].sort(),
@@ -422,8 +474,6 @@ function workspaceQuantity_(value, unit) {
     throw Error("INVALID_QUANTITY");
   const text = String(value).trim().replace(",", ".");
   if (!/^\d+(?:\.\d{1,8})?$/.test(text)) throw Error("INVALID_QUANTITY");
-  const decimal = text.split(".")[1] || "";
-  if (unit === "pcs" && /[1-9]/.test(decimal)) throw Error("INVALID_QUANTITY");
   return workspaceScaledNumber_(workspaceScaledText_(text));
 }
 function workspaceCountTotal_(item, product) {
@@ -504,8 +554,17 @@ function workspaceReportProducts_(notification, current, storedRows) {
           : new Date(input.lastCountedAt).toISOString(),
       approx: input.approx,
       low: input.low,
+      expirationWarning:
+        input.expirationWarning === undefined
+          ? !!current.find((product) => product.id === input.id)
+              ?.expirationWarning
+          : workspaceExpirationWarning_(input.expirationWarning),
     };
   });
+}
+function workspaceExpirationWarning_(value) {
+  if (typeof value !== "boolean") throw Error("INVALID_FLAGS");
+  return value;
 }
 function workspaceCount_(email, request) {
   return v3Lock_(() => {
@@ -539,7 +598,7 @@ function workspaceCount_(email, request) {
       events = [],
       seen = new Set(),
       at = new Date().toISOString();
-    const originalRows = rows_("Products"),
+    const originalRows = workspaceProductRows_(),
       operationId = "V5BATCH:" + id,
       hash = workspaceHash_(request);
     const reportProducts = workspaceReportProducts_(
@@ -588,6 +647,10 @@ function workspaceCount_(email, request) {
           throw Error("INVALID_FLAGS");
         const total = workspaceCountTotal_(item, product),
           p = originalRows.find((p) => p[0] === item.id);
+        const expirationWarning =
+          item.expirationWarning === undefined
+            ? !!product.expirationWarning
+            : workspaceExpirationWarning_(item.expirationWarning);
         const event = [
           operationId + ":" + item.id,
           at,
@@ -620,8 +683,10 @@ function workspaceCount_(email, request) {
           lastCountId: event[0],
           lastLocations: item.locations,
           unit: product.unit,
+          hasStockHistory: true,
           approx: item.approx,
           low: item.low,
+          expirationWarning: expirationWarning,
           catalogVersion: product.catalogVersion,
           countVersion: product.countVersion,
         };
@@ -671,6 +736,13 @@ function workspaceCount_(email, request) {
       request.items
         .filter((item) => items.some((event) => event[3] === item.id))
         .map((item) => ({ productId: item.id, locations: item.locations }));
+    const metadataFor = (items) =>
+      result.accepted
+        .filter((item) => items.some((event) => event[3] === item.id))
+        .map((item) => ({
+          productId: item.id,
+          expirationWarning: item.expirationWarning,
+        }));
     let chunk = [];
     for (const event of compactEvents) {
       if (
@@ -678,6 +750,7 @@ function workspaceCount_(email, request) {
           ...batch,
           events: [...chunk, event],
           locations: locationsFor([...chunk, event]),
+          countMetadata: metadataFor([...chunk, event]),
         }).length > 40000 &&
         chunk.length
       ) {
@@ -694,6 +767,7 @@ function workspaceCount_(email, request) {
           operationId: chunkId,
           events: items,
           locations: locationsFor(items),
+          countMetadata: metadataFor(items),
         });
       return {
         ids: items.map((event) => event[3]),
@@ -815,6 +889,7 @@ function workspaceCatalog_(email, request) {
     )
       throw Error("INVALID_CATALOG");
     if (typeof v9MaterializeProducts_ === "function") v9MaterializeProducts_();
+    workspaceMaterializeUnitChanges_();
     const sheet = book_().getSheetByName("Products"),
       rows = sheet.getDataRange().getValues(),
       input = request.product;
@@ -882,13 +957,6 @@ function workspaceCatalog_(email, request) {
         (hours !== 0 && hours < 1 / 60)
       )
         throw Error("INVALID_INTERVAL");
-      if (
-        product &&
-        product[4] !== input.unit &&
-        (rows_("Events").some((e) => e[3] === product[0]) ||
-          baselines_()[product[0]]?.q != null)
-      )
-        throw Error("UNIT_HAS_HISTORY");
       if (!product) {
         const next =
           1 +
@@ -944,6 +1012,110 @@ function workspaceCatalog_(email, request) {
           ? { deleted: product[0] }
           : { productId: product[0] }),
       };
+    if (before && before[4] !== product[4]) {
+      const previousProduct = workspaceProducts_().find(
+        (p) => p.id === product[0],
+      );
+      if (previousProduct.hasStockHistory || input.unitRecount) {
+        const recount = input.unitRecount;
+        if (!recount) throw Error("UNIT_RECOUNT_REQUIRED");
+        if (recount.confirmed !== true)
+          throw Error("UNIT_RECOUNT_CONFIRM_REQUIRED");
+        if (recount.stockVersion !== previousProduct.stockVersion)
+          throw Error("STOCK_CONFLICT");
+        if (recount.countVersion !== previousProduct.countVersion)
+          throw Error("PRODUCT_CHANGED");
+        if (
+          typeof recount.approx !== "boolean" ||
+          typeof recount.low !== "boolean"
+        )
+          throw Error("INVALID_FLAGS");
+        const total = workspaceCountTotal_(recount, {
+          unit: product[4],
+          zones: v8ProductZones_(product),
+        });
+        const warning =
+          recount.expirationWarning === undefined
+            ? previousProduct.expirationWarning
+            : workspaceExpirationWarning_(recount.expirationWarning);
+        const at = new Date().toISOString();
+        const operationId = "V5BATCH:" + id + "-unit";
+        const hash = workspaceHash_(request);
+        const event = [
+          operationId + ":" + product[0],
+          at,
+          "CHECK",
+          product[0],
+          "CAFE",
+          "",
+          total,
+          email,
+          recount.approx ? "ESTIMATED" : "EXACT",
+          recount.low ? "YES" : "NO",
+          "",
+          "",
+          "", // A cross-unit numeric delta is undefined; old units live below.
+          product[4],
+          product[1],
+          product[2],
+          "",
+          "",
+          hash,
+          "WORKSPACE_UNIT_RECOUNT",
+          at,
+          workspaceProfile_(email).name || "",
+        ];
+        const batch = {
+          version: 8,
+          operationId,
+          sessionId: "",
+          by: email,
+          authorName: workspaceProfile_(email).name || "",
+          submittedAt: at,
+          requestHash: hash,
+          events: [event],
+          workspaceUnitChange: {
+            before,
+            after: product,
+            previousStock: {
+              quantity: previousProduct.last,
+              unit: previousProduct.unit,
+              lastCountedAt: previousProduct.lastCountedAt,
+            },
+          },
+          locations: [{ productId: product[0], locations: recount.locations }],
+          countMetadata: [
+            { productId: product[0], expirationWarning: warning },
+          ],
+        };
+        const json = workspaceJson_(batch);
+        plan.unitEnvelope = [
+          operationId,
+          at,
+          "SESSION_BATCH",
+          "",
+          "CAFE",
+          "",
+          1,
+          email,
+          "",
+          "",
+          json,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          hash,
+          webHash_(json),
+          "V5_SESSION",
+        ];
+        plan.expectedStockVersion = previousProduct.stockVersion;
+        plan.expectedCountVersion = previousProduct.countVersion;
+        result.unitRecounted = true;
+      }
+    }
     return workspaceFinishCatalog_(
       workspaceAppendOperation_(
         id,
@@ -957,6 +1129,8 @@ function workspaceCatalog_(email, request) {
   });
 }
 function workspaceFinishCatalog_(operation) {
+  if (operation.plan.unitEnvelope)
+    return workspaceFinishUnitCatalog_(operation);
   if (operation.result.state !== "PREPARED") return operation.result;
   if (typeof v9MaterializeProducts_ === "function") v9MaterializeProducts_();
   const sheet = book_().getSheetByName("Products"),
@@ -982,6 +1156,59 @@ function workspaceFinishCatalog_(operation) {
     operation.result.product = workspaceProducts_().find(
       (p) => p.id === plan.after[0],
     );
+  workspaceWriteResult_(operation, operation.result);
+  return operation.result;
+}
+function workspaceFinishUnitCatalog_(operation) {
+  if (operation.result.state === "REJECTED")
+    throw Error(operation.result.error);
+  if (operation.result.state !== "PREPARED") return operation.result;
+  const plan = operation.plan;
+  const reject = (code) => {
+    operation.result.state = "REJECTED";
+    operation.result.error = code;
+    workspaceWriteResult_(operation, operation.result);
+    throw Error(code);
+  };
+  const sheet = book_().getSheetByName("Events");
+  const prior = sheet
+    .getDataRange()
+    .getValues()
+    .slice(1)
+    .find((row) => row[0] === plan.unitEnvelope[0]);
+  if (prior) {
+    const batch = v5Decode_(prior);
+    if (
+      !batch ||
+      batch.requestHash !== operation.hash ||
+      batch.by !== operation.actor
+    )
+      throw Error("COMMIT_UNCONFIRMED");
+  } else {
+    const current = workspaceProducts_().find(
+      (product) => product.id === plan.after[0],
+    );
+    if (!current || current.catalogVersion !== workspaceMetadata_(plan.before))
+      return reject("CATALOG_CONFLICT");
+    if (
+      current.stockVersion !== plan.expectedStockVersion ||
+      current.countVersion !== plan.expectedCountVersion
+    )
+      return reject("STOCK_CONFLICT");
+    sheet.appendRow(plan.unitEnvelope);
+    SpreadsheetApp.flush();
+    const saved = sheet
+      .getDataRange()
+      .getValues()
+      .slice(1)
+      .find((row) => row[0] === plan.unitEnvelope[0]);
+    if (!v5Decode_(saved)) throw Error("COMMIT_UNCONFIRMED");
+  }
+  workspaceMaterializeUnitChanges_();
+  operation.result.state = "COMMITTED";
+  operation.result.product = workspaceProducts_().find(
+    (product) => product.id === plan.after[0],
+  );
   workspaceWriteResult_(operation, operation.result);
   return operation.result;
 }

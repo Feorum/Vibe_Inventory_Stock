@@ -14,7 +14,7 @@ The [older Google-mode guide](docs/google-mode.md) documents the original bridge
 
 The phone workspace includes separate searchable Yellow Cards and an opt-in Tips mode. For bot credentials, chat-ID discovery, and an owner-only delivery test, see [Telegram setup](docs/telegram-setup.md).
 
-Workspace v4.4 uses full-column touch-friendly quantity fields, accurate local-draft states, and historical last-counted filters and sorting in the café timezone. The current-draft counter stays beside Save; historical dates and draft completion remain separate. Draft maintenance lives in the Recount menu, and Telegram notifications remain single Russian native RichMessages. See the [current upgrade notes](docs/google-workspace.md#workspace-v44--historical-filters-and-touch-friendly-counting).
+Workspace v4.5 adds safe unit replacement for products with history, fractional piece counts, and the independent manual **Expiration date / Срок годности** warning. A unit replacement requires an explicitly confirmed fresh count in the new unit; old history is not relabeled or converted. The current-draft counter and historical date filters remain separate, and Telegram notifications remain single Russian native RichMessages. See the [current upgrade notes](docs/google-workspace.md#workspace-v45--unit-replacement-fractional-pieces-and-expiry-warning).
 
 ## Run
 

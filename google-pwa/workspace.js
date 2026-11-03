@@ -231,6 +231,7 @@ function flash(key, values = {}, error = false) {
       "refreshed",
       "clearDone",
       "productSaved",
+      "unitChangeSaved",
       "productDeleted",
       "statusDone",
       "noteSaved",
@@ -1229,8 +1230,13 @@ function productCard(p, conflicted) {
       make("p", `${t("countedAt")}: ${dateText(p.lastCountedAt)}`, "help"),
     );
     card.append(recorded);
+    if (p.expirationWarning)
+      card.append(
+        make("p", t("savedExpirationWarning"), "help saved-expiration-warning"),
+      );
     const inputs = make("div", undefined, "quantity-grid"),
       d = record.drafts[p.id];
+    const entryUnit = d?.unit || p.unit;
     const zones = d?.zones || p.zones || [],
       expected = zones.length ? zones : ["unassigned"];
     if (expected.length === 1) inputs.classList.add("single-location");
@@ -1240,16 +1246,16 @@ function productCard(p, conflicted) {
       label.append(
         make(
           "span",
-          `${zoneName(id)}, ${t(`unitShort_${p.unit}`)}`,
+          `${zoneName(id)}, ${t(`unitShort_${entryUnit}`)}`,
           "quantity-caption",
         ),
       );
-      label.title = `${zoneName(id)}, ${t(p.unit)}`;
+      label.title = `${zoneName(id)}, ${t(entryUnit)}`;
       input.type = "text";
       input.className = "quantity-input";
       input.setAttribute(
         "aria-label",
-        `${t("quantity")} · ${zoneName(id)} (${t(p.unit)})`,
+        `${t("quantity")} · ${zoneName(id)} (${t(entryUnit)})`,
       );
       input.inputMode = "decimal";
       input.autocomplete = "off";
@@ -1285,7 +1291,7 @@ function productCard(p, conflicted) {
         Boolean(state.error && state.error !== "INCOMPLETE_LOCATIONS"),
       );
       countFeedback.textContent = state.complete
-        ? `${conflicted ? `${t("draftEntered")} · ${t("review")}` : `✓ ${t("draftEntered")}`} · ${t("localTotal")}: ${quantityText(state.totalValue)} ${t(`unitShort_${p.unit}`)}`
+        ? `${conflicted ? `${t("draftEntered")} · ${t("review")}` : `✓ ${t("draftEntered")}`} · ${t("localTotal")}: ${quantityText(state.totalValue)} ${t(`unitShort_${entryUnit}`)}`
         : entered > 0 && entered < expected.length
           ? t("draftPartialLocations", { entered, total: expected.length })
           : state.entered
@@ -1345,7 +1351,14 @@ function productCard(p, conflicted) {
       const latest = record.drafts[p.id];
       const selected =
         Number(Boolean(latest?.approx)) +
-        Number(Boolean(latest ? latest.low : p.low));
+        Number(Boolean(latest ? latest.low : p.low)) +
+        Number(
+          Boolean(
+            latest && Object.hasOwn(latest, "expirationWarning")
+              ? latest.expirationWarning
+              : p.expirationWarning,
+          ),
+        );
       indicator.textContent = selected
         ? t("additionalSelected", { count: selected })
         : "";
@@ -1353,11 +1366,13 @@ function productCard(p, conflicted) {
       additional.classList.toggle("has-selected", selected > 0);
     };
     const flags = make("div", undefined, "flags");
-    for (const key of ["approx", "low"]) {
+    for (const key of ["approx", "low", "expirationWarning"]) {
       const label = make("label", undefined, "check"),
         input = make("input");
       input.type = "checkbox";
-      input.checked = Boolean(d ? d[key] : key === "low" ? p.low : false);
+      input.checked = Boolean(
+        d && Object.hasOwn(d, key) ? d[key] : key === "approx" ? false : p[key],
+      );
       input.addEventListener("change", () =>
         guard(() => {
           record.drafts[p.id] = editDraft(p, record.drafts[p.id], {
@@ -1369,10 +1384,13 @@ function productCard(p, conflicted) {
       );
       label.append(
         input,
-        make("span", t(key === "approx" ? "approximate" : "low")),
+        make("span", t(key === "approx" ? "approximate" : key)),
       );
       flags.append(label);
     }
+    flags.append(
+      make("p", t("expirationWarningHelp"), "help expiration-warning-help"),
+    );
     updateIndicator();
     additional.append(summary, flags);
     card.append(additional);
@@ -1548,6 +1566,11 @@ function field(
 function confirmSubmission() {
   if (record.pending || record.pendingMutation) throw Error("INVALID_REQUEST");
   if (!writable()) throw Error("SIGN_IN_REQUIRED");
+  // An older deployment would silently ignore the new manual warning field.
+  // Keep drafts intact until the matching server is deployed; old pending
+  // requests still recover through their original, unchanged retry path.
+  if (record.snapshot.features?.expirationWarning !== true)
+    throw Error("WORKSPACE_UPGRADE_REQUIRED");
   let preview;
   try {
     preview = buildSubmission(record.snapshot, record.drafts, {
@@ -1586,10 +1609,16 @@ function confirmSubmission() {
       for (const item of preview.items) {
         const p = record.snapshot.products.find((p) => p.id === item.id);
         const state = draftState(p, record.drafts[item.id]);
+        const warning = Object.hasOwn(
+          record.drafts[item.id],
+          "expirationWarning",
+        )
+          ? record.drafts[item.id].expirationWarning
+          : p.expirationWarning;
         list.append(
           make(
             "li",
-            `${productName(p)}: ${quantityText(state.totalValue)} ${t(p.unit)}${p.active ? "" : ` · ${t("inactive")}`}`,
+            `${productName(p)}: ${quantityText(state.totalValue)} ${t(p.unit)}${p.active ? "" : ` · ${t("inactive")}`}${warning ? ` · ${t("expirationWarning")}` : ""}`,
           ),
         );
       }
@@ -1847,6 +1876,14 @@ function reviewConflict(change) {
           ),
         );
       root.append(list);
+      if (change.product && change.draft?.unit !== change.product.unit)
+        root.append(
+          make(
+            "p",
+            t("unitChangeReviewOldUnit", { unit: t(change.draft.unit) }),
+            "help",
+          ),
+        );
       root.append(button(t("backup"), downloadBackup));
       return {};
     },
@@ -1864,13 +1901,24 @@ function reviewConflict(change) {
         return;
       }
       const old = record.drafts[change.id];
+      if (!old) throw Error("INVALID_COUNT");
       let next = createDraft(change.product);
       next.approx = old.approx;
       next.low = old.low;
+      if (Object.hasOwn(old, "expirationWarning"))
+        next.expirationWarning = old.expirationWarning;
       if (change.product.unit === old.unit) {
         for (const zone of next.zones.length ? next.zones : ["unassigned"])
           if (old.locations?.[zone])
             next.locations[zone] = structuredClone(old.locations[zone]);
+      } else {
+        record.archivedDrafts ||= [];
+        record.archivedDrafts.push({
+          id: change.id,
+          draft: structuredClone(old),
+          archivedAt: new Date().toISOString(),
+          reason: "UNIT_CHANGED",
+        });
       }
       record.drafts[change.id] = next;
       persist();
@@ -1925,7 +1973,7 @@ async function sendMutation() {
     if (epoch !== generation || key !== recordKey())
       throw Error("STALE_OPERATION");
     const rejected =
-      /^(INVALID_|EXISTING_CATEGORY_REQUIRED|UNIT_HAS_HISTORY|PRODUCT_NAME_EXISTS|PRODUCT_DELETED|CATALOG_CONFLICT$|CONFLICT$|CARD_EXISTS|OWNER_ONLY|PWA_READ_ONLY|SIGN_IN_REQUIRED|METHOD_NOT_ALLOWED|TELEGRAM_SETUP_NOT_AVAILABLE)/.test(
+      /^(INVALID_|EXISTING_CATEGORY_REQUIRED|UNIT_HAS_HISTORY|UNIT_RECOUNT_|STOCK_CONFLICT$|PRODUCT_CHANGED$|PRODUCT_NAME_EXISTS|PRODUCT_DELETED|CATALOG_CONFLICT$|CONFLICT$|CARD_EXISTS|OWNER_ONLY|PWA_READ_ONLY|SIGN_IN_REQUIRED|METHOD_NOT_ALLOWED|TELEGRAM_SETUP_NOT_AVAILABLE)/.test(
         String(error.message),
       );
     if (rejected) {
@@ -2013,6 +2061,103 @@ function catalogForm(p) {
         values.zones.push(input);
       }
       root.append(zones);
+      const unitPanel = make("fieldset", undefined, "unit-change-panel");
+      unitPanel.id = "unit-change-counts";
+      unitPanel.append(make("legend", t("unitChangeTitle")));
+      unitPanel.append(make("p", t("unitChangeHelp"), "help"));
+      if (p && record.drafts[p.id])
+        unitPanel.append(make("p", t("unitChangeOldDraft"), "help"));
+      const unitInputs = make("div", undefined, "unit-change-inputs");
+      unitPanel.append(make("p", t("unitChangeCountHelp"), "help"), unitInputs);
+      const confirmedLabel = make("label", undefined, "check");
+      values.unitChangeConfirmed = make("input");
+      values.unitChangeConfirmed.type = "checkbox";
+      values.unitChangeConfirmed.name = "unitChangeConfirmed";
+      confirmedLabel.append(
+        values.unitChangeConfirmed,
+        make("span", t("unitChangeConfirm")),
+      );
+      unitPanel.append(confirmedLabel);
+      values.unitRecountLocations = [];
+      const enteredUnitCounts = new Map();
+      let displayedUnit = values.unit.value;
+      values.needsUnitRecount = () =>
+        Boolean(
+          p &&
+          p.unit !== values.unit.value &&
+          (p.hasStockHistory !== false ||
+            (p.last !== null && p.last !== undefined) ||
+            p.lastCountedAt),
+        );
+      const renderUnitCounts = () => {
+        for (const input of values.unitRecountLocations)
+          enteredUnitCounts.set(
+            `${displayedUnit}:${input.dataset.unitRecountZone}`,
+            input.value,
+          );
+        displayedUnit = values.unit.value;
+        values.unitChangeConfirmed.checked = false;
+        unitPanel.hidden = !values.needsUnitRecount();
+        values.unitChangeConfirmed.disabled = unitPanel.hidden;
+        values.unitRecountLocations = [];
+        unitInputs.replaceChildren();
+        if (unitPanel.hidden) return;
+        for (const zone of values.zones
+          .filter((input) => input.checked)
+          .map((input) => input.value)) {
+          const label = make("label");
+          label.append(
+            make(
+              "span",
+              `${zoneName(zone)}, ${t(`unitShort_${displayedUnit}`)}`,
+            ),
+          );
+          const input = make("input");
+          input.type = "text";
+          input.inputMode = "decimal";
+          input.enterKeyHint = "next";
+          input.autocomplete = "off";
+          input.required = true;
+          input.dataset.unitRecountZone = zone;
+          input.setAttribute(
+            "aria-label",
+            `${t("quantity")} · ${zoneName(zone)} (${t(displayedUnit)})`,
+          );
+          input.value = enteredUnitCounts.get(`${displayedUnit}:${zone}`) || "";
+          const error = make("span", "", "error field-error");
+          error.id = `unit-count-error-${zone}`;
+          input.setAttribute("aria-describedby", error.id);
+          input.addEventListener("input", () => {
+            values.unitChangeConfirmed.checked = false;
+            error.textContent = "";
+            input.removeAttribute("aria-invalid");
+            try {
+              if (input.value.trim())
+                quantityInput(input.value, values.unit.value);
+            } catch (failure) {
+              error.textContent = t(errorKey(failure));
+              input.setAttribute("aria-invalid", "true");
+            }
+          });
+          input.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" || event.isComposing) return;
+            event.preventDefault();
+            const index = values.unitRecountLocations.indexOf(input);
+            (
+              values.unitRecountLocations[index + 1] ||
+              values.unitChangeConfirmed
+            ).focus();
+          });
+          label.append(input, error);
+          values.unitRecountLocations.push(input);
+          unitInputs.append(label);
+        }
+      };
+      values.unit.addEventListener("change", renderUnitCounts);
+      for (const checkbox of values.zones)
+        checkbox.addEventListener("change", renderUnitCounts);
+      root.append(unitPanel);
+      renderUnitCounts();
       values.reminder = field(
         root,
         "reminder",
@@ -2052,6 +2197,34 @@ function catalogForm(p) {
     async (v) => {
       const zones = v.zones.filter((x) => x.checked).map((x) => x.value);
       if (!zones.length) throw Error("INVALID_PRODUCT");
+      let unitRecount;
+      if (v.needsUnitRecount()) {
+        if (record.snapshot.features?.unitRecount !== true)
+          throw Error("WORKSPACE_UPGRADE_REQUIRED");
+        if (!v.unitChangeConfirmed.checked)
+          throw Error("UNIT_RECOUNT_CONFIRM_REQUIRED");
+        const locations = v.unitRecountLocations.map((input) => ({
+          zoneId: input.dataset.unitRecountZone,
+          value: quantityInput(input.value, v.unit.value).value,
+          unit: "BASE",
+        }));
+        const nextProduct = { ...p, unit: v.unit.value, zones };
+        const draft = createDraft(nextProduct);
+        for (const location of locations)
+          draft.locations[location.zoneId].value = location.value;
+        const state = draftState(nextProduct, draft);
+        if (!state.complete)
+          throw Error(state.error || "UNIT_RECOUNT_REQUIRED");
+        unitRecount = {
+          confirmed: true,
+          stockVersion: p.stockVersion,
+          countVersion: p.countVersion,
+          locations,
+          approx: false,
+          low: Boolean(p.low),
+          expirationWarning: Boolean(p.expirationWarning),
+        };
+      }
       const parsedMinimum =
         v.minimum.value.trim() === ""
           ? null
@@ -2073,21 +2246,43 @@ function catalogForm(p) {
         (!Number.isFinite(interval) || interval <= 0)
       )
         throw Error("INVALID_INTERVAL");
-      await mutation("workspaceCatalog", {
-        action: "save",
-        product: {
-          ...(p ? { id: p.id, catalogVersion: p.catalogVersion } : {}),
-          ru: v.ru.value.trim(),
-          en: v.en.value.trim(),
-          category: v.category.value.trim(),
-          unit: v.unit.value,
-          zones,
-          minimum,
-          reminderHours: v.reminder.value === "off" ? null : interval,
-          active: v.active.checked,
-        },
-      });
-      await completeMutation("productSaved");
+      const form = $("#dialog-form");
+      const disabledStates = unitRecount
+        ? [...form.querySelectorAll("input,select,textarea,button")].map(
+            (control) => [control, control.disabled],
+          )
+        : [];
+      const epoch = generation;
+      if (unitRecount) {
+        for (const [control] of disabledStates) control.disabled = true;
+        form.setAttribute("aria-busy", "true");
+      }
+      try {
+        await mutation("workspaceCatalog", {
+          action: "save",
+          product: {
+            ...(p ? { id: p.id, catalogVersion: p.catalogVersion } : {}),
+            ru: v.ru.value.trim(),
+            en: v.en.value.trim(),
+            category: v.category.value.trim(),
+            unit: v.unit.value,
+            zones,
+            minimum,
+            reminderHours: v.reminder.value === "off" ? null : interval,
+            active: v.active.checked,
+            ...(unitRecount ? { unitRecount } : {}),
+          },
+        });
+        await completeMutation(
+          unitRecount ? "unitChangeSaved" : "productSaved",
+        );
+      } finally {
+        if (unitRecount && epoch === generation) {
+          form.removeAttribute("aria-busy");
+          for (const [control, disabled] of disabledStates)
+            if (control.isConnected) control.disabled = disabled;
+        }
+      }
     },
   );
 }

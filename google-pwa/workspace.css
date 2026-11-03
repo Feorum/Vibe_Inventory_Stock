@@ -554,6 +554,39 @@ p {
   flex-wrap: wrap;
   gap: 0.15rem 0.65rem;
 }
+.expiration-warning-help {
+  flex-basis: 100%;
+  margin: 0.15rem 0 0.25rem;
+}
+.saved-expiration-warning {
+  margin: 0 0 0.3rem;
+  color: #785119;
+}
+.unit-change-panel {
+  border-color: #8b9f86;
+  background: #f6faf3;
+}
+.unit-change-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: 0.65rem;
+  margin-block: 0.5rem;
+}
+.unit-change-inputs label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.unit-change-inputs input {
+  font-size: max(16px, 1rem);
+  min-height: 48px;
+}
+.unit-change-panel .check {
+  align-items: flex-start;
+  padding-block: 0.35rem;
+}
+.unit-change-panel .check input {
+  margin-top: 0.1rem;
+}
 .product-card .flags .check {
   font-size: 0.85rem;
   font-weight: 400;

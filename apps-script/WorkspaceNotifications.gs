@@ -27,6 +27,7 @@ function workspaceNotificationWords_(language) {
     approximate: "Примерно",
     lowFlag: "Мало",
     counted: "Последний пересчёт",
+    expirationWarning: "Срок годности",
     reminder: "VARKA · Пора пересчитать",
     reminderHelp:
       "Подтвердите остаток новым пересчётом, даже если количество не изменилось.",
@@ -65,6 +66,15 @@ function workspaceNotificationLines_(products, accepted, language, words) {
     if (!product.active) labels.push(words.inactive);
     if (source.approx) labels.push(words.approximate);
     if (source.low) labels.push(words.lowFlag);
+    // This is an independent manual warning, not an inferred expiry date.
+    // Older count results without the new field retain the confirmed snapshot.
+    const expirationWarning = Object.prototype.hasOwnProperty.call(
+      source,
+      "expirationWarning",
+    )
+      ? source.expirationWarning
+      : product.expirationWarning;
+    if (expirationWarning === true) labels.push(words.expirationWarning);
     const flags = labels.length ? " [" + labels.join(", ") + "]" : "";
     const quantity =
       source.last === null || source.last === undefined

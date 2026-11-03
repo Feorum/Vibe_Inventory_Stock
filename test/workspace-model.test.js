@@ -389,7 +389,8 @@ test("workspace quantity preserves zero and exact decimals without floating poin
   ])
     assert.throws(() => quantityInput(value, "l"), /INVALID_QUANTITY/);
   assert.throws(() => quantityInput("1000000001", "l"), /QUANTITY_RANGE/);
-  assert.throws(() => quantityInput("0,5", "pcs"), /WHOLE_PIECES_REQUIRED/);
+  assert.equal(quantityInput("0,5", "pcs").value, "0.5");
+  assert.equal(quantityInput("1.00000001", "pcs").value, "1.00000001");
 });
 
 test("new Telegram submission snapshots are Russian even when the interface is English", () => {
@@ -420,6 +421,69 @@ test("blank quantities with Approximate and Low flags are not completed counts",
   assert.equal(request.summary.entered, 0);
   assert.equal(request.summary.uncounted, 1);
   assert.deepEqual(request.notification.lowIds, ["P001"]);
+});
+
+test("expiration is an independent warning flag, not a date or a physical count", () => {
+  const p = product();
+  const draft = editDraft(p, null, { expirationWarning: true });
+  assert.equal(draftState(p, draft).complete, false);
+  const request = buildSubmission(
+    snapshot([p]),
+    { [p.id]: draft },
+    { scope: "ALL" },
+  );
+  assert.deepEqual(request.items, []);
+  assert.equal(request.notification.products[0].expirationWarning, true);
+  assert.equal(request.notification.products[0].lastCountedAt, p.lastCountedAt);
+  assert.throws(
+    () => editDraft(p, draft, { expirationWarning: "2026-11-03" }),
+    /INVALID_FLAGS/,
+  );
+});
+
+test("warning flag is frozen with quantity submission and older drafts omit rather than clear it", () => {
+  const p = product({ expirationWarning: true });
+  const draft = editDraft(p, entered(p), { expirationWarning: false });
+  const request = buildSubmission(snapshot([p]), { [p.id]: draft });
+  assert.equal(request.items[0].expirationWarning, false);
+  const changed = editDraft(p, draft, { expirationWarning: true });
+  assert.equal(request.items[0].expirationWarning, false);
+  assert.equal(changed.expirationWarning, true);
+  const oldDraft = entered(p);
+  delete oldDraft.expirationWarning;
+  const oldRequest = buildSubmission(snapshot([p]), { [p.id]: oldDraft });
+  assert.equal(Object.hasOwn(oldRequest.items[0], "expirationWarning"), false);
+  assert.equal(oldRequest.notification.products[0].expirationWarning, true);
+});
+
+test("warning acknowledgment clears matching drafts and preserves newer flag edits", () => {
+  const p = product();
+  const draft = editDraft(p, entered(p), { expirationWarning: true });
+  const request = buildSubmission(snapshot([p]), { [p.id]: draft });
+  const result = {
+    state: "COMMITTED",
+    accepted: [
+      {
+        ...request.items[0],
+        stockVersion: "new-stock",
+        last: "1.25",
+        expirationWarning: true,
+      },
+    ],
+  };
+  const record = {
+    snapshot: snapshot([p]),
+    drafts: { [p.id]: draft },
+    pending: request,
+  };
+  const saved = applyAcknowledgment(record, result);
+  assert.equal(saved.snapshot.products[0].expirationWarning, true);
+  assert.equal(saved.drafts[p.id], undefined);
+  record.drafts[p.id] = editDraft(p, draft, { expirationWarning: false });
+  const newer = applyAcknowledgment(record, result);
+  assert.equal(newer.drafts[p.id].expirationWarning, false);
+  assert.equal(newer.drafts[p.id].stockVersion, "new-stock");
+  assert.equal(newer.snapshot.products[0].expirationWarning, true);
 });
 
 test("per-location draft requires all assigned zones, preserving explicit zero", () => {
@@ -468,9 +532,9 @@ test("counting progress needs complete valid current drafts, not recorded quanti
   const before = structuredClone(drafts);
   assert.deepEqual(countingProgress(snapshot(products), drafts), {
     total: 7,
-    entered: 2,
-    uncounted: 5,
-    uncheckedIds: ["blank", "flags", "partial", "invalid", "pieces"],
+    entered: 3,
+    uncounted: 4,
+    uncheckedIds: ["blank", "flags", "partial", "invalid"],
   });
   assert.deepEqual(drafts, before);
   assert.deepEqual(countingProgress(snapshot(products)), {

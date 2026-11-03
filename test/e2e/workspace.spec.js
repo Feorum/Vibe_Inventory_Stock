@@ -37,6 +37,8 @@ async function mockWorkspace(
     lastCountedAt: "2026-10-28T12:00:00.000Z",
     approx: false,
     low: false,
+    expirationWarning: false,
+    hasStockHistory: true,
     ...extra,
   });
   const backend = {
@@ -62,6 +64,11 @@ async function mockWorkspace(
       }),
     ],
     notes: [],
+    features: {
+      unitRecount: true,
+      fractionalPieces: true,
+      expirationWarning: true,
+    },
     categories: ["Dairy", "Coffee", "Packaging"],
     cards: [
       {
@@ -95,12 +102,15 @@ async function mockWorkspace(
     profile: { email, name: "Test staff" },
     requests: [],
     committed: new Map(),
+    catalogCommitted: new Map(),
+    history: [],
     notifications: new Map(),
     saves: 0,
     telegramSends: 0,
     notificationFail: false,
     notificationUnknown: false,
     countResponseLost: false,
+    catalogResponseLost: false,
     failLoad: false,
     heldCount: null,
     heldLoad: null,
@@ -117,10 +127,18 @@ async function mockWorkspace(
     telegramTestFail: false,
     telegramTestResponseLost: false,
   };
+  backend.history = backend.products.map((product) => ({
+    productId: product.id,
+    unit: product.unit,
+    quantity: product.last,
+    at: product.lastCountedAt,
+    kind: "CHECK",
+  }));
   const snapshot = () =>
     structuredClone({
       databaseId: backend.databaseId,
       timeZone: backend.timeZone,
+      features: backend.features,
       products: backend.products,
       zones: backend.zones,
       categories: backend.categories,
@@ -218,6 +236,16 @@ async function mockWorkspace(
           current.lastCountedAt = backend.serverNow;
           current.approx = item.approx;
           current.low = item.low;
+          if (Object.hasOwn(item, "expirationWarning"))
+            current.expirationWarning = item.expirationWarning;
+          current.hasStockHistory = true;
+          backend.history.push({
+            productId: current.id,
+            unit: current.unit,
+            quantity: current.last,
+            at: current.lastCountedAt,
+            kind: "CHECK",
+          });
           data.accepted.push({
             id: item.id,
             editVersion: item.editVersion,
@@ -227,6 +255,7 @@ async function mockWorkspace(
             catalogVersion: current.catalogVersion,
             approx: current.approx,
             low: current.low,
+            expirationWarning: current.expirationWarning,
           });
           backend.saves++;
         }
@@ -326,11 +355,48 @@ async function mockWorkspace(
       backend.notifications.set(body.id, current);
       data = current;
     } else if (request.method === "workspaceCatalog") {
+      if (backend.catalogCommitted.has(body.id)) {
+        await route.fulfill({
+          json: { ok: true, data: backend.catalogCommitted.get(body.id) },
+        });
+        return;
+      }
       const change = body.product;
       let current = backend.products.find((p) => p.id === change.id);
       if (current && current.catalogVersion !== change.catalogVersion) {
         await route.fulfill({ json: { ok: false, error: "CONFLICT" } });
         return;
+      }
+      const unitChanged =
+        current && body.action === "save" && current.unit !== change.unit;
+      const recount = change.unitRecount;
+      if (unitChanged && current.hasStockHistory !== false) {
+        let error;
+        if (!recount) error = "UNIT_RECOUNT_REQUIRED";
+        else if (recount.confirmed !== true)
+          error = "UNIT_RECOUNT_CONFIRM_REQUIRED";
+        else if (recount.stockVersion !== current.stockVersion)
+          error = "STOCK_CONFLICT";
+        else if (recount.countVersion !== current.countVersion)
+          error = "PRODUCT_CHANGED";
+        else if (
+          !Array.isArray(recount.locations) ||
+          recount.locations.length !== change.zones.length ||
+          change.zones.some(
+            (zone) =>
+              !recount.locations.some(
+                (location) =>
+                  location.zoneId === zone &&
+                  location.unit === "BASE" &&
+                  /^\d+(?:\.\d{1,8})?$/.test(String(location.value)),
+              ),
+          )
+        )
+          error = "INVALID_ZONES";
+        if (error) {
+          await route.fulfill({ json: { ok: false, error } });
+          return;
+        }
       }
       if (body.action === "delete") {
         backend.products = backend.products.filter((p) => p.id !== change.id);
@@ -341,7 +407,7 @@ async function mockWorkspace(
             `P${backend.products.length + 1}`,
             change.ru,
             change.en,
-            { last: null, lastCountedAt: null },
+            { last: null, lastCountedAt: null, hasStockHistory: false },
           );
           backend.products.push(current);
         }
@@ -350,7 +416,9 @@ async function mockWorkspace(
           current.unit,
           current.zones,
         ]);
-        Object.assign(current, change, {
+        const metadata = { ...change };
+        delete metadata.unitRecount;
+        Object.assign(current, metadata, {
           catalogVersion: `${body.id}-catalog`,
         });
         if (
@@ -358,7 +426,38 @@ async function mockWorkspace(
           JSON.stringify([current.active, current.unit, current.zones])
         )
           current.countVersion = `${body.id}-count`;
-        data = { product: structuredClone(current) };
+        if (unitChanged && recount) {
+          current.last = recount.locations.reduce(
+            (sum, location) => sum + Number(location.value),
+            0,
+          );
+          current.lastCountedAt = backend.serverNow;
+          current.stockVersion = `${body.id}-stock`;
+          current.approx = recount.approx;
+          current.low = recount.low;
+          current.hasStockHistory = true;
+          if (Object.hasOwn(recount, "expirationWarning"))
+            current.expirationWarning = recount.expirationWarning;
+          backend.history.push({
+            productId: current.id,
+            unit: current.unit,
+            quantity: current.last,
+            at: current.lastCountedAt,
+            kind: "UNIT_RECOUNT",
+          });
+        }
+        data = {
+          product: structuredClone(current),
+          ...(unitChanged && recount ? { unitRecounted: true } : {}),
+        };
+      }
+      backend.catalogCommitted.set(body.id, structuredClone(data));
+      if (backend.catalogResponseLost) {
+        backend.catalogResponseLost = false;
+        await route.fulfill({
+          json: { ok: false, error: "GOOGLE_REQUEST_FAILED" },
+        });
+        return;
       }
     } else if (request.method === "workspaceTeam") {
       if (body.kind === "card") {
@@ -944,15 +1043,14 @@ test("Catalog adds, edits minimum and fixed reminders, and deletes only the conf
   await form.locator('[name="englishName"]').fill("Test syrup");
   await form.locator('[name="category"]').selectOption("Coffee");
   await form.locator('[name="unit"]').selectOption("pcs");
-  await form.locator('[name="minimum"]').fill("0,5");
+  await form.locator('[name="minimum"]').fill("-0,5");
   await form.getByRole("checkbox", { name: "Shelf", exact: true }).check();
   await form.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(form.locator(".dialog-error")).toContainText("whole number");
+  await expect(form.locator(".dialog-error")).toContainText("nonnegative");
   expect(
     backend.requests.filter((request) => request.method === "workspaceCatalog"),
   ).toHaveLength(0);
   await expect(form.locator('[name="name"]')).toHaveValue("Тестовый сироп");
-  await form.locator('[name="unit"]').selectOption("l");
   await form.locator('[name="minimum"]').fill("2,5");
   await form.getByRole("checkbox", { name: "Shelf", exact: true }).check();
   await form.locator('[name="reminder"]').selectOption("off");
@@ -1752,7 +1850,7 @@ test("unchecked progress preserves typing focus, distinguishes zero and incomple
   await expect(coffee).not.toBeVisible();
   await expect(page.locator("#count-progress")).toHaveText("2 of 3 ready");
   await cups.fill("0.5");
-  await expect(page.locator("#count-progress")).toHaveText("2 of 3 ready");
+  await expect(page.locator("#count-progress")).toHaveText("3 of 3 ready");
   await cups.fill("");
   await page.getByLabel("Search products", { exact: true }).fill("cups");
   await openConfirmation(page);
@@ -1932,6 +2030,39 @@ test("count feedback distinguishes partial drafts, shows totals and local errors
     "Entered 1 of 3 products. The rest will remain unchanged.",
   );
   expect(backend.saves).toBe(0);
+});
+
+test("an older deployment cannot silently discard the new warning fields", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.features = undefined;
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "0.5", "0");
+  await openAdditional(page, "P001");
+  await card(page, "P001")
+    .getByLabel("Expiration date", { exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Synchronize quantity", exact: true })
+    .click();
+  await expect(page.locator("#message")).toContainText("Update Workspace.gs");
+  expect(
+    backend.requests.filter((request) => request.method === "workspaceCount"),
+  ).toHaveLength(0);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "0.5",
+  );
+  backend.features = {
+    unitRecount: true,
+    fractionalPieces: true,
+    expirationWarning: true,
+  };
+  await page.locator("#refresh").click();
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(1);
+  expect(backend.products[0].expirationWarning).toBe(true);
 });
 
 test("capture reproducible mobile comparison screenshots", async ({
@@ -2446,4 +2577,354 @@ test("old successes do not survive reload or linger, but failed Telegram deliver
     page.getByRole("button", { name: "Retry notification only", exact: true }),
   ).toBeVisible();
   expect(backend.saves).toBe(3);
+});
+
+test("fractional piece counts accept comma and dot, survive reload, and save only explicitly entered quantities", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  const pieces = card(page, "P003").locator('[data-zone="shelf"]');
+  await pieces.fill("0,5");
+  await expect(card(page, "P003").locator(".count-feedback")).toContainText(
+    "0.5",
+  );
+  await expect(pieces).not.toHaveAttribute("aria-invalid", "true");
+  await page.reload();
+  await login(page);
+  await expect(pieces).toHaveValue("0,5");
+  await pieces.fill("1.25");
+  await card(page, "P002").locator('[data-zone="shelf"]').fill("0");
+  await page.getByLabel("Search products", { exact: true }).fill("milk");
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(2);
+  expect(backend.products.find((product) => product.id === "P003").last).toBe(
+    1.25,
+  );
+  expect(backend.products.find((product) => product.id === "P002").last).toBe(
+    0,
+  );
+  expect(backend.products.find((product) => product.id === "P001").last).toBe(
+    5,
+  );
+  const saved = backend.requests.find(
+    (request) => request.method === "workspaceCount",
+  ).body;
+  expect(
+    saved.items.find((item) => item.id === "P003").locations[0].value,
+  ).toBe("1.25");
+});
+
+test("changing a historical unit requires a fresh confirmed count and safely replays a lost reply without rewriting history", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  const originalHistory = structuredClone(backend.history);
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "4,25", "0");
+  await page.locator('[data-view="catalog"]').click();
+  await card(page, "P001")
+    .getByRole("button", { name: "Edit product", exact: true })
+    .click();
+  const form = page.getByRole("dialog");
+  await form.locator('[name="unit"]').selectOption("kg");
+  const panel = form.locator("#unit-change-counts");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-unit-recount-zone="fridge"]')).toHaveValue(
+    "",
+  );
+  await expect(panel.locator('[data-unit-recount-zone="shelf"]')).toHaveValue(
+    "",
+  );
+  await panel.locator('[data-unit-recount-zone="fridge"]').fill("2,5");
+  await panel.locator('[data-unit-recount-zone="shelf"]').fill("0");
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form).toBeVisible();
+  expect(
+    backend.requests.filter((request) => request.method === "workspaceCatalog"),
+  ).toHaveLength(0);
+  await panel.locator('[name="unitChangeConfirmed"]').check();
+  backend.catalogResponseLost = true;
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        backend.history.filter((entry) => entry.kind === "UNIT_RECOUNT").length,
+    )
+    .toBe(1);
+  await form.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Retry safely", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        backend.requests.filter(
+          (request) => request.method === "workspaceCatalog",
+        ).length,
+    )
+    .toBe(2);
+  const requests = backend.requests.filter(
+    (request) => request.method === "workspaceCatalog",
+  );
+  expect(requests[0].body).toEqual(requests[1].body);
+  expect(backend.history.slice(0, originalHistory.length)).toEqual(
+    originalHistory,
+  );
+  expect(
+    backend.history.filter((entry) => entry.kind === "UNIT_RECOUNT"),
+  ).toEqual([
+    {
+      productId: "P001",
+      unit: "kg",
+      quantity: 2.5,
+      at: backend.serverNow,
+      kind: "UNIT_RECOUNT",
+    },
+  ]);
+  expect(backend.products[0].unit).toBe("kg");
+  expect(backend.products[0].last).toBe(2.5);
+  expect(backend.telegramSends).toBe(0);
+  await page.locator('[data-view="stock"]').click();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "4,25",
+  );
+  await expect(
+    card(page, "P001").locator(".quantity-caption").first(),
+  ).toContainText(", l");
+  await expect(
+    card(page, "P001").locator('[data-zone="fridge"]'),
+  ).toHaveAttribute("aria-label", /litres/);
+  await page
+    .getByRole("button", { name: /Review conflict/ })
+    .first()
+    .click();
+  await expect(form).toContainText("4,25");
+  await form
+    .getByRole("button", {
+      name: "I rechecked — use current version",
+      exact: true,
+    })
+    .click();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "",
+  );
+  const archives = await page.evaluate(() =>
+    Object.entries(localStorage)
+      .filter(([key]) => key.startsWith("varka-workspace:["))
+      .map(([, value]) => JSON.parse(value))
+      .flatMap((record) => record.archivedDrafts || []),
+  );
+  expect(
+    archives.some(
+      (entry) =>
+        entry.id === "P001" &&
+        entry.draft.unit === "l" &&
+        entry.draft.locations.fridge.value === "4,25",
+    ),
+  ).toBe(true);
+});
+
+test("a concurrent stock change rejects a unit recount and leaves entered new-unit values available for review", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="catalog"]').click();
+  await card(page, "P001")
+    .getByRole("button", { name: "Edit product", exact: true })
+    .click();
+  const form = page.getByRole("dialog");
+  await form.locator('[name="unit"]').selectOption("kg");
+  await form.locator('[data-unit-recount-zone="fridge"]').fill("1,75");
+  await form.locator('[data-unit-recount-zone="shelf"]').fill("0");
+  await form.locator('[name="unitChangeConfirmed"]').check();
+  backend.products[0].stockVersion = "another-device-stock";
+  backend.products[0].last = 9;
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form.locator(".dialog-error")).not.toBeEmpty();
+  await expect(form.locator('[data-unit-recount-zone="fridge"]')).toHaveValue(
+    "1,75",
+  );
+  await expect(form.locator('[data-unit-recount-zone="shelf"]')).toHaveValue(
+    "0",
+  );
+  expect(backend.products[0].unit).toBe("l");
+  expect(backend.products[0].last).toBe(9);
+  expect(
+    backend.history.filter((entry) => entry.kind === "UNIT_RECOUNT"),
+  ).toHaveLength(0);
+  await form.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry safely", exact: true }),
+  ).not.toBeVisible();
+});
+
+test("expiration warning alone stays an uncounted local draft and hidden counted warnings save with the whole draft", async ({
+  page,
+  context,
+}) => {
+  const backend = await mockWorkspace(page);
+  const oldDate = backend.products[1].lastCountedAt;
+  await page.goto(appPath);
+  await login(page);
+  await openAdditional(page, "P002");
+  await card(page, "P002")
+    .getByLabel("Expiration date", { exact: true })
+    .check();
+  await expect(page.locator("#count-progress")).toHaveText("0 of 3 ready");
+  expect(backend.products[1].expirationWarning).toBe(false);
+  expect(backend.products[1].lastCountedAt).toBe(oldDate);
+  await page.locator('[data-view="profile"]').click();
+  await page.locator('[data-view="stock"]').click();
+  await openAdditional(page, "P002");
+  await expect(
+    card(page, "P002").getByLabel("Expiration date", { exact: true }),
+  ).toBeChecked();
+  await page.reload();
+  await login(page);
+  await openAdditional(page, "P002");
+  await expect(
+    card(page, "P002").getByLabel("Expiration date", { exact: true }),
+  ).toBeChecked();
+  await context.setOffline(true);
+  await card(page, "P002").locator('[data-zone="shelf"]').fill("0,25");
+  await enterMilk(page, "1.5", "0");
+  await context.setOffline(false);
+  await page.locator("#refresh").click();
+  await openAdditional(page, "P002");
+  await expect(
+    card(page, "P002").getByLabel("Expiration date", { exact: true }),
+  ).toBeChecked();
+  await page.getByLabel("Search products", { exact: true }).fill("milk");
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(2);
+  const saved = backend.requests.find(
+    (request) => request.method === "workspaceCount",
+  ).body;
+  expect(saved.items.find((item) => item.id === "P002").expirationWarning).toBe(
+    true,
+  );
+  expect(saved.items.find((item) => item.id === "P001").expirationWarning).toBe(
+    false,
+  );
+  expect(
+    saved.notification.products.find((product) => product.id === "P002")
+      .expirationWarning,
+  ).toBe(true);
+  expect(backend.products[1].expirationWarning).toBe(true);
+  await resetStockFilters(page);
+  await expect(
+    card(page, "P002").locator(".saved-expiration-warning"),
+  ).toBeVisible();
+});
+
+test("newer expiration warning edits survive count acknowledgement and Russian flags remain usable on a phone", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "1", "0");
+  await openAdditional(page, "P001");
+  const warning = card(page, "P001").getByLabel("Expiration date", {
+    exact: true,
+  });
+  await warning.check();
+  let release;
+  backend.heldCount = new Promise((resolve) => (release = resolve));
+  await send(page);
+  await expect
+    .poll(
+      () =>
+        backend.requests.filter(
+          (request) => request.method === "workspaceCount",
+        ).length,
+    )
+    .toBe(1);
+  await warning.uncheck();
+  release();
+  await expect.poll(() => backend.saves).toBe(1);
+  await expect(warning).not.toBeChecked();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "1",
+  );
+  expect(backend.products[0].expirationWarning).toBe(true);
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(2);
+  expect(backend.products[0].expirationWarning).toBe(false);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .locator("#workspace")
+    .getByRole("combobox", { name: "Language", exact: true })
+    .selectOption("ru");
+  await page.locator('[data-view="stock"]').click();
+  const additional = card(page, "P001").locator(".additional-controls");
+  if (!(await additional.evaluate((element) => element.open)))
+    await additional.locator("summary").click();
+  await card(page, "P001").getByLabel("Срок годности", { exact: true }).check();
+  await expect(page.locator("#count-progress")).toHaveText("Готово 0 из 3");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("the Russian unit-change recount form remains labeled and tappable at 360 pixels", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .locator("#workspace")
+    .getByRole("combobox", { name: "Language", exact: true })
+    .selectOption("ru");
+  await page.locator('[data-view="catalog"]').click();
+  await card(page, "P001")
+    .getByRole("button", { name: "Изменить товар", exact: true })
+    .click();
+  const form = page.getByRole("dialog");
+  await form.locator('[name="unit"]').selectOption("pcs");
+  const fields = form.locator("[data-unit-recount-zone]");
+  await expect(fields).toHaveCount(2);
+  for (const field of await fields.all()) {
+    await field.scrollIntoViewIfNeeded();
+    const bounds = await field.boundingBox();
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(361);
+    expect(
+      await field.evaluate((element) =>
+        parseFloat(getComputedStyle(element).fontSize),
+      ),
+    ).toBeGreaterThanOrEqual(16);
+  }
+  await fields.nth(0).fill("0,5");
+  await fields.nth(1).fill("0");
+  await form.locator('[name="unitChangeConfirmed"]').check();
+  const report = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(
+    report.violations.map((violation) => ({
+      id: violation.id,
+      targets: violation.nodes.map((node) => node.target),
+    })),
+  ).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await form.getByRole("button", { name: "Сохранить", exact: true }).click();
+  await expect(form).not.toBeVisible();
+  expect(backend.products[0].unit).toBe("pcs");
+  expect(backend.products[0].last).toBe(0.5);
+  expect(backend.history[0].unit).toBe("l");
 });

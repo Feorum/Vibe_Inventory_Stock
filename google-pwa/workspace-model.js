@@ -46,8 +46,6 @@ export function quantityInput(value, unit) {
   const [whole, fraction = ""] = raw.split(".");
   const scaled = BigInt(whole) * SCALE + BigInt(fraction.padEnd(8, "0"));
   if (scaled > LIMIT) throw failure("QUANTITY_RANGE");
-  if (unit === "pcs" && scaled % SCALE !== 0n)
-    throw failure("WHOLE_PIECES_REQUIRED");
   return { value: decimalValue(scaled), scaled };
 }
 
@@ -65,6 +63,7 @@ export function createDraft(product) {
     ),
     approx: false,
     low: Boolean(product.low),
+    expirationWarning: Boolean(product.expirationWarning),
     countedAt: null,
   };
 }
@@ -81,6 +80,11 @@ export function editDraft(product, old, patch, options = {}) {
       };
   if (Object.hasOwn(patch, "approx")) draft.approx = Boolean(patch.approx);
   if (Object.hasOwn(patch, "low")) draft.low = Boolean(patch.low);
+  if (Object.hasOwn(patch, "expirationWarning")) {
+    if (typeof patch.expirationWarning !== "boolean")
+      throw failure("INVALID_FLAGS");
+    draft.expirationWarning = patch.expirationWarning;
+  }
   draft.editVersion = options.editVersion || crypto.randomUUID();
   draft.countedAt = options.now || new Date().toISOString();
   return draft;
@@ -108,6 +112,11 @@ export function draftState(product, draft) {
     return state;
   }
   try {
+    if (
+      Object.hasOwn(draft, "expirationWarning") &&
+      typeof draft.expirationWarning !== "boolean"
+    )
+      throw failure("INVALID_FLAGS");
     for (const zone of expected) {
       const input = draft.locations[zone];
       if (input.unit && input.unit !== "BASE")
@@ -358,6 +367,9 @@ export function buildSubmission(snapshot, drafts, options = {}) {
       locations: state.locations,
       approx: Boolean(draft.approx),
       low: Boolean(draft.low),
+      ...(Object.hasOwn(draft, "expirationWarning")
+        ? { expirationWarning: draft.expirationWarning }
+        : {}),
       countedAt: draft.countedAt,
     });
   }
@@ -388,6 +400,12 @@ export function buildSubmission(snapshot, drafts, options = {}) {
         low: drafts[product.id]
           ? Boolean(drafts[product.id].low)
           : Boolean(product.low),
+        expirationWarning: Object.hasOwn(
+          drafts[product.id] || {},
+          "expirationWarning",
+        )
+          ? drafts[product.id].expirationWarning
+          : Boolean(product.expirationWarning),
       })),
     },
     summary: {
@@ -439,6 +457,8 @@ export function applyAcknowledgment(record, result, request = record.pending) {
         "approx",
         "low",
         "lastLocations",
+        "expirationWarning",
+        "hasStockHistory",
       ])
         if (Object.hasOwn(accepted, field))
           product[field] = clone(accepted[field]);

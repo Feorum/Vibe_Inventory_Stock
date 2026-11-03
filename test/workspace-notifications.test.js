@@ -233,6 +233,95 @@ test("workspace Russian Telegram text is consistent and preserves decimals/user 
   assert.match(previous, /5,12345678 л/);
 });
 
+test("manual expiration warning uses accepted counts or the frozen previous product without changing freshness labels", () => {
+  const h = harness();
+  const catalog = clone(products);
+  catalog[0].expirationWarning = false;
+  catalog[1].expirationWarning = true;
+  const counted = clone(result);
+  counted.accepted[0].expirationWarning = true;
+  const text = h.seed(request(), counted, catalog).messages[0];
+  assert.match(
+    text,
+    /Молоко \[Примерно, Срок годности\]<br>Пересчитано сейчас: 2,5 л/,
+  );
+  assert.match(
+    text,
+    /Чашки \[Неактивный, Срок годности\]<br>Ранее записано: 0 шт\./,
+  );
+  assert.doesNotMatch(text, /Expired|Expiration|Срок годности:/);
+  assert.equal(catalog[0].expirationWarning, false);
+  assert.equal(counted.accepted[0].expirationWarning, true);
+  const entered = h.seed(request("ENTERED"), counted, catalog).messages[0];
+  assert.match(entered, /Молоко \[Примерно, Срок годности\]/);
+  assert.doesNotMatch(entered, /Чашки/);
+});
+
+test("manual expiration warning distinguishes explicit false from older accepted payloads without the flag", () => {
+  const h = harness();
+  const catalog = clone(products);
+  catalog[0].expirationWarning = true;
+  const compatible = h.seed(request("ENTERED"), result, catalog).messages[0];
+  assert.match(compatible, /Срок годности/);
+  const cleared = clone(result);
+  cleared.accepted[0].expirationWarning = false;
+  assert.doesNotMatch(
+    h.seed(request("ENTERED"), cleared, catalog).messages[0],
+    /Срок годности/,
+  );
+  assert.doesNotMatch(
+    h.seed(request(), result, products).messages[0],
+    /Срок годности/,
+  );
+});
+
+test("manual expiration warning remains independent from Low and user text stays escaped", () => {
+  const h = harness();
+  const catalog = clone(products);
+  catalog[0].ru = "Молоко <b> & <script>";
+  const counted = clone(result);
+  counted.accepted[0].expirationWarning = true;
+  const text = h.seed(request("ENTERED"), counted, catalog).messages[0];
+  assert.match(
+    text,
+    /Молоко &lt;b&gt; &amp; &lt;script&gt; \[Примерно, Срок годности\]/,
+  );
+  assert.doesNotMatch(text, /\[Примерно, Мало|<script>|<b>/);
+  // The new warning must not silently add a product to the manual Low scope.
+  assert.doesNotMatch(
+    h.seed(request("LOW"), counted, catalog).messages[0],
+    /Молоко|Срок годности/,
+  );
+  for (const invalid of [null, "true", 1]) {
+    counted.accepted[0].expirationWarning = invalid;
+    assert.doesNotMatch(
+      h.seed(request("ENTERED"), counted, catalog).messages[0],
+      /Срок годности/,
+    );
+  }
+});
+
+test("previously queued RichMessage payloads are delivered unchanged after adding expiration warnings", () => {
+  const h = harness();
+  const notification = h.seed(request(), result, products);
+  const changedCatalog = clone(products);
+  changedCatalog.forEach((product) => (product.expirationWarning = true));
+  h.setProducts(changedCatalog);
+  assert.equal(
+    h.context.workspaceDeliver_(request().id, "staff@example.test").status,
+    "SENT",
+  );
+  assert.equal(
+    JSON.parse(h.calls[0].options.payload).rich_message.html,
+    notification.messages[0],
+  );
+  assert.doesNotMatch(notification.messages[0], /Срок годности/);
+  assert.deepEqual(
+    h.operations.get(request().id).result.notification.messages,
+    notification.messages,
+  );
+});
+
 test("an entire large recount is one native Russian RichMessage without truncation or text splitting", () => {
   const h = harness();
   const catalog = Array.from({ length: 150 }, (_, i) => ({

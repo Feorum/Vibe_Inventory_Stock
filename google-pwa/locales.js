@@ -520,7 +520,29 @@ Object.assign(ru, {
     "Некоторые записи конфликтуют или не сохранены. Проверьте указанные товары. Принятые записи сохранены, остальные черновики оставлены.",
 });
 Object.assign(en, {
-  version: "VARKA · Workspace v4.4",
+  version: "VARKA · Workspace v4.5",
+  unitChangeTitle: "Change unit and recount",
+  unitChangeHelp:
+    "Enter a fresh physical count for every selected location in the new unit and review the minimum quantity in that unit. History keeps its original units. No automatic conversion or Telegram message is sent.",
+  unitChangeConfirm: "I physically recounted these locations in the new unit.",
+  unitChangeSaved:
+    "Unit and new-unit count saved. Previous history is unchanged.",
+  unitChangeOldDraft:
+    "Your existing count draft remains in its old unit and must be reviewed separately.",
+  unitChangeCountHelp:
+    "Enter quantities in the newly selected unit. Old quantities are not prefilled or converted.",
+  unitChangeReviewOldUnit:
+    "Previous draft unit: {unit}. Its values will be archived, not converted.",
+  expirationWarning: "Expiration date",
+  expirationWarningHelp:
+    "Manual warning to check expiry; this is not a calendar date or an automatic expiry calculation.",
+  savedExpirationWarning: "Previously recorded: check expiration date",
+  UNIT_RECOUNT_REQUIRED:
+    "Changing the unit of a product with stock history requires a fresh count in the new unit.",
+  WORKSPACE_UPGRADE_REQUIRED:
+    "Update Workspace.gs in Apps Script, deploy a New version, then refresh the database. Your drafts are preserved; this older server does not support the new counting fields.",
+  UNIT_RECOUNT_CONFIRM_REQUIRED:
+    "Confirm that you physically recounted every selected location in the new unit.",
   lastCountedFilter: "Last counted",
   dateAll: "All dates",
   dateToday: "Today",
@@ -634,7 +656,29 @@ Object.assign(en, {
     "Set the bot token and destination chat ID privately in Apps Script Properties.",
 });
 Object.assign(ru, {
-  version: "VARKA · Рабочее пространство v4.4",
+  version: "VARKA · Рабочее пространство v4.5",
+  unitChangeTitle: "Сменить единицу и пересчитать",
+  unitChangeHelp:
+    "Введите новый физический пересчёт всех выбранных мест в новой единице и проверьте минимальный остаток в ней. История сохранит исходные единицы. Автоматического пересчёта величин и сообщения Telegram не будет.",
+  unitChangeConfirm: "Я пересчитал(а) все выбранные места в новой единице.",
+  unitChangeSaved:
+    "Единица и пересчёт в новой единице сохранены. Предыдущая история не изменена.",
+  unitChangeOldDraft:
+    "Существующий черновик остаётся в старой единице и требует отдельной проверки.",
+  unitChangeCountHelp:
+    "Введите количество в новой выбранной единице. Старые значения не подставляются и не конвертируются.",
+  unitChangeReviewOldUnit:
+    "Единица прежнего черновика: {unit}. Значения будут сохранены в архиве, а не конвертированы.",
+  expirationWarning: "Срок годности",
+  expirationWarningHelp:
+    "Ручное предупреждение: проверить срок годности. Это не календарная дата и не автоматический расчёт.",
+  savedExpirationWarning: "Ранее отмечено: проверить срок годности",
+  UNIT_RECOUNT_REQUIRED:
+    "Для смены единицы товара с историей остатков нужен новый пересчёт в новой единице.",
+  WORKSPACE_UPGRADE_REQUIRED:
+    "Обновите Workspace.gs в Apps Script, разверните новую версию и обновите базу. Черновики сохранены: старый сервер не поддерживает новые поля пересчёта.",
+  UNIT_RECOUNT_CONFIRM_REQUIRED:
+    "Подтвердите физический пересчёт всех выбранных мест в новой единице.",
   lastCountedFilter: "Последний пересчёт",
   dateAll: "Все даты",
   dateToday: "Сегодня",

@@ -317,6 +317,11 @@ test("workspace exposes the configured café timezone without adding or changing
   const db = database();
   const original = copy([...db.sheets.values()].map((sheet) => sheet.values));
   assert.equal(db.load().timeZone, "Europe/Minsk");
+  assert.deepEqual(db.load().features, {
+    unitRecount: true,
+    fractionalPieces: true,
+    expirationWarning: true,
+  });
   db.properties.set("CAFE_TIMEZONE", "America/New_York");
   const loaded = db.load();
   assert.equal(loaded.timeZone, "America/New_York");
@@ -944,9 +949,246 @@ test("Apps Script decimal text arithmetic is exact beyond the safe integer bound
       () => db.context.workspaceQuantity_(value, "l"),
       /INVALID_QUANTITY/,
     );
+  assert.equal(db.context.workspaceQuantity_("0.00000001", "pcs"), 0.00000001);
+});
+
+const unitChangeRequest = (db, product, unit = "pcs") => ({
+  id: randomUUID(),
+  action: "save",
+  product: {
+    ...product,
+    unit,
+    unitRecount: {
+      confirmed: true,
+      stockVersion: product.stockVersion,
+      countVersion: product.countVersion,
+      locations: [
+        { zoneId: "fridge", value: "1,25", unit: "BASE" },
+        { zoneId: "shelf", value: "0.5", unit: "BASE" },
+      ],
+      approx: false,
+      low: true,
+      expirationWarning: true,
+    },
+  },
+});
+
+test("historical unit changes require an explicitly confirmed fresh recount and preserve original event units", () => {
+  const db = database();
+  const original = db.load().products[0];
+  assert.equal(original.hasStockHistory, false);
+  db.call("workspaceCount", db.countRequest([db.item(original, "5")]));
+  const counted = db.load().products[0];
+  assert.equal(counted.hasStockHistory, true);
+  const request = unitChangeRequest(db, counted);
+  for (const recount of [
+    undefined,
+    { ...request.product.unitRecount, confirmed: false },
+  ]) {
+    assert.throws(
+      () =>
+        db.call("workspaceCatalog", {
+          ...request,
+          id: randomUUID(),
+          product: { ...request.product, unitRecount: recount },
+        }),
+      /UNIT_RECOUNT_/,
+    );
+  }
+  const oldRows = copy(db.sheets.get("Events").values);
+  const result = db.call("workspaceCatalog", request);
+  assert.equal(result.unitRecounted, true);
+  assert.equal(result.product.unit, "pcs");
+  assert.equal(result.product.last, 1.75);
+  assert.equal(result.product.expirationWarning, true);
+  assert.deepEqual(
+    db.sheets.get("Events").values.slice(0, oldRows.length),
+    oldRows,
+  );
+  const checks = copy(db.context.rows_("Events")).filter(
+    (event) => event[3] === counted.id,
+  );
+  assert.deepEqual(
+    checks.map((event) => event[13]),
+    ["l", "pcs"],
+  );
+  assert.equal(checks[1][12], ""); // Never pretend the old unit is a new-unit delta.
+  const unitBatch = db.context.v5Decode_(db.sheets.get("Events").values.at(-1));
+  assert.equal(unitBatch.workspaceUnitChange.previousStock.unit, "l");
+  assert.equal(unitBatch.workspaceUnitChange.previousStock.quantity, 5);
+  assert.equal(db.load().products[0].unit, "pcs");
+  assert.deepEqual(db.call("workspaceCatalog", request), result);
+  assert.equal(db.sheets.get("Events").values.length, oldRows.length + 1);
+  const stale = db.call(
+    "workspaceCount",
+    db.countRequest([db.item(counted, "99")]),
+  );
+  assert.equal(stale.conflicted.length, 1);
+  assert.equal(db.load().products[0].last, 1.75);
+});
+
+test("unit changes accept decimal pieces but reject incomplete recounts, stale stock, wrong ownership and changed request bodies", () => {
+  const db = database({ baseline: { P001: { q: 3 } } });
+  const current = db.load().products[0];
+  const request = unitChangeRequest(db, current);
   assert.throws(
-    () => db.context.workspaceQuantity_("0.00000001", "pcs"),
-    /INVALID_QUANTITY/,
+    () =>
+      db.call("workspaceCatalog", {
+        ...request,
+        product: {
+          ...request.product,
+          unitRecount: {
+            ...request.product.unitRecount,
+            locations: request.product.unitRecount.locations.slice(0, 1),
+          },
+        },
+      }),
+    /INVALID_ZONES/,
+  );
+  db.call("workspaceCount", db.countRequest([db.item(current, "2")]));
+  assert.throws(() => db.call("workspaceCatalog", request), /STOCK_CONFLICT/);
+  const fresh = unitChangeRequest(db, db.load().products[0]);
+  db.call("workspaceCatalog", fresh);
+  assert.throws(
+    () => db.call("workspaceCatalog", fresh, "other"),
+    /REQUEST_ID_REUSED/,
+  );
+  assert.throws(
+    () =>
+      db.call("workspaceCatalog", {
+        ...fresh,
+        product: { ...fresh.product, unit: "kg" },
+      }),
+    /REQUEST_ID_REUSED/,
+  );
+  const p = db.load().products[0];
+  const result = db.call(
+    "workspaceCount",
+    db.countRequest([db.item(p, "0,125")]),
+  );
+  assert.equal(result.accepted[0].last, 0.125);
+});
+
+test("unit recount projection repairs interruptions after the authoritative envelope without replaying or restoring stale metadata", () => {
+  const db = database({ baseline: { P001: { q: 3 } } });
+  const request = unitChangeRequest(db, db.load().products[0]);
+  let once = true;
+  db.fault((sheet, action) => {
+    if (once && sheet === "Events" && action === "append") {
+      once = false;
+      throw Error("lost event reply");
+    }
+  });
+  assert.throws(() => db.call("workspaceCatalog", request), /lost event reply/);
+  assert.equal(db.sheets.get("Products").values[1][4], "l");
+  const projected = db.load().products[0];
+  assert.equal(projected.unit, "pcs");
+  assert.equal(projected.last, 1.75);
+  db.fault(() => {});
+  db.call("workspaceCatalog", {
+    id: randomUUID(),
+    action: "save",
+    product: { ...projected, ru: "Newer metadata" },
+  });
+  const fresh = db.load().products[0];
+  db.call("workspaceCount", db.countRequest([db.item(fresh, "4.5")]));
+  const repaired = db.call("workspaceCatalog", request);
+  assert.equal(repaired.state, "COMMITTED");
+  assert.equal(db.load().products[0].ru, "Newer metadata");
+  assert.equal(db.load().products[0].last, 4.5);
+  assert.equal(db.sheets.get("Events").values.length, 3);
+});
+
+test("a unit plan interrupted before Events cannot overwrite a later stock change on any retry", () => {
+  const db = database({ baseline: { P001: { q: 3 } } });
+  const p = db.load().products[0];
+  const request = unitChangeRequest(db, p);
+  let once = true;
+  db.fault((sheet, action) => {
+    if (once && sheet === "WorkspaceOperations" && action === "append") {
+      once = false;
+      throw Error("lost plan reply");
+    }
+  });
+  assert.throws(() => db.call("workspaceCatalog", request), /lost plan reply/);
+  db.fault(() => {});
+  db.call("workspaceCount", db.countRequest([db.item(p, "8")]));
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.throws(() => db.call("workspaceCatalog", request), /STOCK_CONFLICT/);
+  assert.equal(db.load().products[0].unit, "l");
+  assert.equal(db.load().products[0].last, 8);
+});
+
+test("unit row materialization faults and repeated unit changes keep a coherent projection and immutable unit chain", () => {
+  const db = database({ baseline: { P001: { q: 3 } } });
+  const request = unitChangeRequest(db, db.load().products[0]);
+  let once = true;
+  db.fault((sheet, action) => {
+    if (once && sheet === "Products" && action === "set") {
+      once = false;
+      throw Error("lost row acknowledgment");
+    }
+  });
+  assert.throws(
+    () => db.call("workspaceCatalog", request),
+    /lost row acknowledgment/,
+  );
+  assert.equal(db.load().products[0].unit, "pcs");
+  assert.equal(db.load().products[0].last, 1.75);
+  db.fault(() => {});
+  db.call("workspaceCatalog", request);
+  for (const unit of ["kg", "l"]) {
+    const p = db.load().products[0];
+    const next = unitChangeRequest(db, p, unit);
+    db.call("workspaceCatalog", next);
+    assert.equal(db.load().products[0].unit, unit);
+    assert.equal(db.load().products[0].last, 1.75);
+    db.call("workspaceCatalog", next);
+  }
+  assert.deepEqual(
+    copy(db.context.rows_("Events")).map((event) => event[13]),
+    ["pcs", "kg", "l"],
+  );
+  assert.equal(db.sheets.get("Events").values.length, 4);
+});
+
+test("expiration warning is immutable count metadata, survives older clients and explicitly clears only on a counted item", () => {
+  const db = database();
+  let p = db.load().products[0];
+  assert.equal(p.expirationWarning, false);
+  const first = db.call(
+    "workspaceCount",
+    db.countRequest([{ ...db.item(p, "1"), expirationWarning: true }]),
+  );
+  assert.equal(first.accepted[0].expirationWarning, true);
+  p = db.load().products[0];
+  assert.equal(p.expirationWarning, true);
+  const oldClient = db.call(
+    "workspaceCount",
+    db.countRequest([db.item(p, "2")]),
+  );
+  assert.equal(oldClient.accepted[0].expirationWarning, true);
+  p = db.load().products[0];
+  const bad = db.call(
+    "workspaceCount",
+    db.countRequest([{ ...db.item(p, "3"), expirationWarning: "true" }]),
+  );
+  assert.equal(bad.failed[0].error, "INVALID_FLAGS");
+  const blank = db.call(
+    "workspaceCount",
+    db.countRequest([{ ...db.item(p, ""), expirationWarning: false }]),
+  );
+  assert.equal(blank.accepted.length, 0);
+  assert.equal(db.load().products[0].expirationWarning, true);
+  const before = copy(db.sheets.get("Events").values);
+  db.call(
+    "workspaceCount",
+    db.countRequest([{ ...db.item(p, "2"), expirationWarning: false }]),
+  );
+  assert.equal(db.load().products[0].expirationWarning, false);
+  assert.deepEqual(
+    db.sheets.get("Events").values.slice(0, before.length),
+    before,
   );
 });
 
