@@ -8,6 +8,7 @@ import {
   editDraft,
   draftState,
   conflicts,
+  countingProgress,
   filterProducts,
   buildSubmission,
   applyAcknowledgment,
@@ -94,6 +95,19 @@ test("workspace quantity preserves zero and exact decimals without floating poin
   assert.throws(() => quantityInput("0,5", "pcs"), /WHOLE_PIECES_REQUIRED/);
 });
 
+test("new Telegram submission snapshots are Russian even when the interface is English", () => {
+  const p = product(),
+    drafts = { [p.id]: entered(p) };
+  for (const language of ["en", "ru", undefined]) {
+    const options = { language, scope: "ALL" };
+    const request = buildSubmission(snapshot([p]), drafts, options);
+    assert.equal(request.notification.language, "ru");
+    assert.equal(options.language, language);
+    assert.equal(request.items[0].locations[0].value, "1.25");
+    assert.equal(drafts[p.id].locations.fridge.value, "1,25");
+  }
+});
+
 test("blank quantities with Approximate and Low flags are not completed counts", () => {
   const p = product();
   const draft = editDraft(p, null, { approx: true, low: true });
@@ -127,6 +141,113 @@ test("per-location draft requires all assigned zones, preserving explicit zero",
     state.locations.map((x) => x.value),
     ["0", "0"],
   );
+});
+
+test("counting progress needs complete valid current drafts, not recorded quantities or flags", () => {
+  const products = [
+    product({ id: "blank" }),
+    product({ id: "flags" }),
+    product({ id: "partial" }),
+    product({ id: "invalid" }),
+    product({ id: "zero" }),
+    product({ id: "decimal", active: false }),
+    product({ id: "pieces", unit: "pcs" }),
+  ];
+  const byId = Object.fromEntries(products.map((p) => [p.id, p]));
+  const drafts = {
+    flags: editDraft(byId.flags, null, { low: true, approx: true }),
+    partial: editDraft(byId.partial, null, {
+      locations: { fridge: { value: "0" } },
+    }),
+    invalid: editDraft(byId.invalid, entered(byId.invalid), {
+      locations: { shelf: { value: "-1" } },
+    }),
+    zero: editDraft(byId.zero, null, {
+      locations: { fridge: { value: "0" }, shelf: { value: "0" } },
+    }),
+    decimal: entered(byId.decimal),
+    pieces: entered(byId.pieces),
+  };
+  const before = structuredClone(drafts);
+  assert.deepEqual(countingProgress(snapshot(products), drafts), {
+    total: 7,
+    entered: 2,
+    uncounted: 5,
+    uncheckedIds: ["blank", "flags", "partial", "invalid", "pieces"],
+  });
+  assert.deepEqual(drafts, before);
+  assert.deepEqual(countingProgress(snapshot(products)), {
+    total: 7,
+    entered: 0,
+    uncounted: 7,
+    uncheckedIds: products.map((p) => p.id),
+  });
+  assert.deepEqual(countingProgress(null), {
+    total: 0,
+    entered: 0,
+    uncounted: 0,
+    uncheckedIds: [],
+  });
+});
+
+test("counting progress exposes stale drafts and excludes tombstones without losing their data", () => {
+  const old = product({ id: "stale" });
+  const deleted = product({ id: "deleted", deleted: true });
+  const unassigned = product({ id: "unassigned", zones: [] });
+  const current = product({ id: "current" });
+  const drafts = {
+    stale: entered(old),
+    deleted: entered(deleted),
+    orphan: entered(product({ id: "orphan" })),
+    unassigned: editDraft(unassigned, null, {
+      locations: { unassigned: { value: "0,5" } },
+    }),
+    current: entered(current),
+  };
+  const before = structuredClone(drafts);
+  for (const change of [
+    { stockVersion: "new-stock" },
+    { active: false },
+    { zones: ["fridge"] },
+    { unit: "pcs" },
+  ]) {
+    const data = snapshot([
+      { ...old, ...change },
+      deleted,
+      unassigned,
+      current,
+    ]);
+    assert.deepEqual(countingProgress(data, drafts), {
+      total: 3,
+      entered: 2,
+      uncounted: 1,
+      uncheckedIds: ["stale"],
+    });
+  }
+  assert.deepEqual(drafts, before);
+});
+
+test("progress and unchecked visibility do not narrow the full-catalog submission", () => {
+  const p1 = product({ id: "first" });
+  const p2 = product({ id: "second", category: "Other" });
+  const p3 = product({ id: "blank" });
+  const data = snapshot([p1, p2, p3]);
+  const drafts = { first: entered(p1), second: entered(p2) };
+  const progress = countingProgress(data, drafts);
+  const visible = filterProducts(data.products, { category: "Dairy" }).filter(
+    (p) => progress.uncheckedIds.includes(p.id),
+  );
+  assert.deepEqual(
+    visible.map((p) => p.id),
+    ["blank"],
+  );
+  const request = buildSubmission(data, drafts);
+  assert.deepEqual(
+    request.items.map((item) => item.id),
+    ["first", "second"],
+  );
+  assert.equal(request.summary.entered, progress.entered);
+  assert.equal(request.summary.uncounted, progress.uncounted);
 });
 
 test("unassigned products support one explicit total input", () => {

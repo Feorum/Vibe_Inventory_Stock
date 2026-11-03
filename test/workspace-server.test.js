@@ -565,6 +565,15 @@ test("complete catalogs beyond old limits use segmented journal and multiple nat
     db.load().products.every((p) => p.last === 1),
     true,
   );
+  assert.equal(result.notification.format, "RICH");
+  assert.equal(result.notification.language, "ru");
+  assert.equal(result.notification.messages.length, 1);
+  assert.equal(result.notification.delivery.length, 1);
+  assert.ok(result.notification.messages[0].length > 4096);
+  for (const product of snapshot.products)
+    assert.ok(
+      result.notification.messages[0].includes(product.id + " · " + product.ru),
+    );
   assert.deepEqual(db.call("workspaceCount", request), result);
 });
 test("team notes and cards use original schema and mutation IDs; no duplicates on retry", () => {
@@ -689,7 +698,7 @@ test("partially saved multi-envelope retry does not overwrite a newer count or l
   assert.equal(db.load().products.find((p) => p.id === uncommitted.id).last, 9);
   const message = result.notification.messages.join("\n");
   assert.ok(
-    message.includes(`${uncommitted.id} · ${uncommitted.en}\nNot counted`),
+    message.includes(`${uncommitted.id} · ${uncommitted.ru}<br>Не пересчитано`),
   );
 });
 test("a deleted Low item returns a per-item conflict without blocking other valid counts", () => {
@@ -770,10 +779,10 @@ test("Telegram ALL freezes uncounted saved values and product membership at Send
   });
   const result = db.call("workspaceCount", request),
     report = result.notification.messages.join("\n");
-  assert.ok(report.includes("Fresh recount: 1 l"));
-  assert.ok(report.includes("Previously recorded: 2 l"));
+  assert.ok(report.includes("Пересчитано сейчас: 1 л"));
+  assert.ok(report.includes("Ранее записано: 2 л"));
   assert.equal(report.includes("Added later"), false);
-  assert.equal(report.includes("Previously recorded: 9 l"), false);
+  assert.equal(report.includes("Ранее записано: 9 л"), false);
   assert.equal(db.load().products[1].last, 9);
 });
 test("report-only previous quantities never update inventory and unknown report IDs are refused", () => {
@@ -784,9 +793,7 @@ test("report-only previous quantities never update inventory and unknown report 
     { ...p, last: 123, lastCountedAt: "2025-01-01T00:00:00.000Z" },
   ];
   const result = db.call("workspaceCount", request);
-  assert.ok(
-    result.notification.messages[0].includes("Previously recorded: 123 l"),
-  );
+  assert.ok(result.notification.messages[0].includes("Ранее записано: 123 л"));
   assert.equal(db.load().products[0].last, null);
   assert.throws(
     () =>
@@ -833,9 +840,7 @@ test("old floating movement artifacts in uncounted report data never block fresh
   const result = db.call("workspaceCount", request);
   assert.equal(result.accepted.length, 1);
   assert.ok(
-    result.notification.messages
-      .join("\n")
-      .includes("Previously recorded: 0.3 l"),
+    result.notification.messages.join("\n").includes("Ранее записано: 0,3 л"),
   );
 });
 
@@ -962,5 +967,40 @@ test("Telegram test dispatch is owner-only, read-only-gated, replayable and isol
         "owner",
       ),
     /PWA_READ_ONLY/,
+  );
+});
+
+test("one Russian RichMessage is delivered only after stock commits, and rejection never rolls inventory back", () => {
+  const db = database();
+  db.properties.set("TELEGRAM_TOKEN", "private-rich-integration-test");
+  db.properties.set("TELEGRAM_CHAT_ID", "-100123456789");
+  const request = db.countRequest([db.item(db.load().products[0], "7")], "ALL");
+  const result = db.call("workspaceCount", request);
+  assert.equal(result.state, "COMMITTED");
+  assert.equal(result.notification.language, "ru");
+  const eventRows = db.sheets.get("Events").values.length;
+  let attempts = 0;
+  db.context.UrlFetchApp = {
+    fetch(url, options) {
+      attempts++;
+      assert.equal(db.load().products[0].last, 7);
+      assert.ok(url.endsWith("/sendRichMessage"));
+      const payload = JSON.parse(options.payload);
+      assert.equal(payload.rich_message.skip_entity_detection, true);
+      assert.ok(payload.rich_message.html.includes("Пересчитано сейчас: 7 л"));
+      assert.equal(Object.hasOwn(payload, "text"), false);
+      return {
+        getResponseCode: () => 400,
+        getContentText: () => JSON.stringify({ ok: false, error_code: 400 }),
+      };
+    },
+  };
+  assert.equal(db.call("workspaceNotify", { id: request.id }).status, "FAILED");
+  assert.equal(attempts, 1);
+  assert.equal(db.load().products[0].last, 7);
+  assert.equal(db.sheets.get("Events").values.length, eventRows);
+  assert.equal(
+    db.call("workspaceStatus", { id: request.id }).status,
+    "COMMITTED",
   );
 });

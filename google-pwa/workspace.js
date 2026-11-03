@@ -11,6 +11,7 @@ import {
   applyAcknowledgment,
   mergeSnapshot,
   storageKey,
+  countingProgress,
 } from "./workspace-model.js";
 
 const $ = (value) => document.querySelector(value);
@@ -46,9 +47,12 @@ let generation = 0,
   loginOpen = false;
 const notifying = new Set();
 const teamViews = new Map();
+const stockDetails = new Map();
+const pagePositions = new Map();
 let layoutObserver;
+let updateStockProgress = () => {};
 const filters = {
-  stock: { search: "", zone: "", category: "" },
+  stock: { search: "", zone: "", category: "", onlyUnchecked: false },
   catalog: { search: "", zone: "", category: "" },
 };
 const t = (key, values) => translate(language, key, values);
@@ -252,9 +256,24 @@ function setLanguage(value) {
 document.body.innerHTML = `<a class="skip" href="#main" data-i18n="skip"></a><header><strong class="brand">VARKA</strong><span id="connection-badge"></span><button id="online-login" type="button" data-i18n="signInAgain" hidden></button><button id="refresh" type="button" data-i18n="refresh" hidden></button></header><main id="main"><p id="message" role="status" aria-live="polite" tabindex="-1"></p><section id="connect-panel" class="panel"><h1 data-i18n="loginTitle"></h1><p class="help" data-i18n="loginHelp"></p><form id="connect-form" class="form-grid"><label><span data-i18n="username"></span><input id="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label><label><span data-i18n="password"></span><input id="password" type="password" required autocomplete="current-password" maxlength="200"></label><label><span data-i18n="endpoint"></span><input id="endpoint" type="url" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label><div id="login-language-wrap"></div><button id="sign-in" class="primary" data-i18n="signIn"></button></form><p class="help" data-i18n="privacy"></p><button id="restore-offline" type="button" data-i18n="restoreOffline" hidden></button><p id="cache-identity" class="help" hidden></p></section><section id="workspace" hidden><h1 id="view-heading" tabindex="-1"></h1><div id="pending-panel" class="panel" hidden><h2 data-i18n="pending"></h2><p data-i18n="pendingHelp"></p><button id="retry" type="button" data-i18n="retry"></button></div><div id="notification-panel" class="panel" hidden></div><div id="page-content"></div><div id="undo-panel" hidden></div></section></main><div id="count-bar" class="count-bar" hidden><div><span class="help" data-i18n="draftNotice"></span><button id="synchronize-quantity" type="button" class="primary" data-i18n="syncQuantity"></button></div></div><nav id="navigation" aria-label="VARKA" hidden></nav><footer data-i18n="version"></footer><dialog id="workspace-dialog"><form id="dialog-form" class="form-grid" novalidate></form></dialog>`;
 $("#login-language-wrap").append(languageSelect("login-language"));
 $("#count-bar").classList.add("compact-count-bar");
+$("#count-bar").setAttribute("role", "region");
+$("#count-bar").dataset.i18nLabel = "stock";
+const dockContent = $("#count-bar > div");
+dockContent.classList.add("stock-dock-content");
+const countProgress = make("span");
+countProgress.id = "count-progress";
+countProgress.setAttribute("aria-hidden", "true");
+const dockAction = make("div");
+dockAction.id = "stock-dock-action";
+dockAction.append($("#synchronize-quantity"));
+dockContent.prepend(countProgress);
+dockContent.append(dockAction);
+$("#count-bar").append($("#count-bar [data-i18n=draftNotice]"));
 $("#count-bar [data-i18n=draftNotice]").dataset.tip = "true";
-$("#synchronize-quantity").dataset.i18n = "syncQuantityCompact";
+$("#synchronize-quantity").dataset.i18n = "saveCountCompact";
 $("#synchronize-quantity").dataset.i18nLabel = "syncQuantity";
+$("#refresh").dataset.i18n = "refreshCompact";
+$("#refresh").dataset.i18nLabel = "refresh";
 $("#main").tabIndex = -1;
 $("#connect-form").noValidate = true;
 $("#username").value = config.username || "";
@@ -277,7 +296,17 @@ $("#synchronize-quantity").addEventListener("click", () =>
 );
 $("#restore-offline").addEventListener("click", () => guard(restoreOffline));
 $("#workspace-dialog").addEventListener("close", () => {
-  if (opener?.isConnected && !opener.disabled) opener.focus();
+  $("#workspace-dialog").classList.remove(
+    "bottom-sheet",
+    "recount-menu-dialog",
+  );
+  delete $("#workspace-dialog").dataset.kind;
+  const restoredOpener = opener?.isConnected
+    ? opener
+    : opener?.id
+      ? document.getElementById(opener.id)
+      : null;
+  if (restoredOpener && !restoredOpener.disabled) restoredOpener.focus();
   else $("#view-heading")?.focus({ preventScroll: true });
 });
 $("#workspace-dialog").addEventListener("keydown", (event) => {
@@ -309,6 +338,7 @@ $("#workspace-dialog").addEventListener("keydown", (event) => {
 
 function controls() {
   applyTips();
+  if (record.snapshot && page === "stock") updateStockProgress(false);
   const has = Boolean(record.snapshot);
   $("#workspace").hidden = !has;
   $("#connect-panel").hidden = has && !loginOpen;
@@ -517,6 +547,7 @@ async function refresh() {
   }
 }
 function render() {
+  updateStockProgress = () => {};
   document.documentElement.lang = language;
   bindText();
   if (!record.snapshot) {
@@ -528,10 +559,13 @@ function render() {
   nav.replaceChildren();
   for (const id of ["stock", "catalog", "team", "profile"]) {
     const b = button(t(id), () => {
+      pagePositions.set(`${recordKey()}:${page}`, window.scrollY);
       page = id;
       render();
       $("#view-heading").focus({ preventScroll: true });
-      window.scrollTo({ top: 0 });
+      window.scrollTo({
+        top: pagePositions.get(`${recordKey()}:${page}`) || 0,
+      });
     });
     b.dataset.view = id;
     if (page === id) b.setAttribute("aria-current", "page");
@@ -539,30 +573,278 @@ function render() {
   }
   const root = $("#page-content");
   root.replaceChildren();
-  if (page === "stock" || page === "catalog") renderProducts(root);
+  if (page === "stock") renderStockProducts(root);
+  else if (page === "catalog") renderProducts(root);
   else if (page === "team") renderTeam(root);
   else renderProfile(root);
   renderNotification();
   controls();
   observeLayout();
 }
-function renderProducts(root) {
-  const current = filters[page],
-    all = record.snapshot.products || [];
-  const filter = make(
-    "section",
-    undefined,
-    `panel filters workspace-filters${page === "stock" ? " stock-filters" : ""}`,
+function renderStockProducts(root) {
+  const current = filters.stock;
+  const all = (record.snapshot.products || []).filter(
+    (product) => !product.deleted,
   );
+  const searchRow = make("div", undefined, "stock-search-row");
+  const searchLabel = make("label", t("search"), "filter-search");
+  const search = make("input");
+  search.type = "search";
+  search.value = current.search;
+  searchLabel.append(search);
+  const filterButton = button(t("filtersButton"), openStockFilters);
+  filterButton.id = "stock-filter-button";
+  const recount = button("⋯", openRecountMenu, "recount-menu-button");
+  recount.id = "recount-menu";
+  recount.setAttribute("aria-label", t("recountMenu"));
+  recount.title = t("recountMenu");
+  searchRow.append(searchLabel, filterButton, recount);
+  root.append(searchRow);
+  const chips = make("div", undefined, "selected-stock-filters");
+  chips.id = "selected-stock-filters";
+  root.append(chips);
+  const progressRow = make("div", undefined, "stock-progress-row");
+  const progressText = make("span", undefined, "stock-progress");
+  progressText.id = "stock-progress";
+  progressText.setAttribute("role", "status");
+  const uncheckedLabel = make("label", undefined, "check unchecked-control");
+  const unchecked = make("input");
+  unchecked.type = "checkbox";
+  unchecked.id = "stock-only-unchecked";
+  unchecked.checked = Boolean(current.onlyUnchecked);
+  uncheckedLabel.append(unchecked, make("span", t("onlyUnchecked")));
+  progressRow.append(progressText, uncheckedLabel);
+  root.append(progressRow, tip("countHelp"));
+  const result = make("p", undefined, "help filter-results");
+  root.append(result);
+  const conflictBox = make("section", undefined, "panel");
+  root.append(conflictBox);
+  const cards = make("div", undefined, "product-list stock-product-list");
+  root.append(cards);
+  function updateChips() {
+    chips.replaceChildren();
+    for (const [key, value] of [
+      ["zone", current.zone ? zoneName(current.zone) : ""],
+      ["category", current.category],
+    ]) {
+      if (!value) continue;
+      const chip = button(
+        `${value} ×`,
+        () => {
+          current[key] = "";
+          list();
+          filterButton.focus({ preventScroll: true });
+        },
+        "filter-chip",
+      );
+      chip.dataset.filter = key;
+      chip.setAttribute("aria-label", t("removeFilter", { filter: value }));
+      chips.append(chip);
+    }
+    chips.hidden = !chips.childElementCount;
+  }
+  updateStockProgress = (applyVisibility = false) => {
+    const progress = countingProgress(record.snapshot, record.drafts);
+    const text = t("countProgress", progress);
+    if (progressText.textContent !== text) progressText.textContent = text;
+    $("#count-progress").textContent = text;
+    if (applyVisibility && current.onlyUnchecked) {
+      const remaining = new Set(progress.uncheckedIds);
+      const activeCard = document.activeElement?.closest(".product-card");
+      for (const card of cards.querySelectorAll(".product-card"))
+        card.hidden =
+          !remaining.has(card.dataset.productId) && card !== activeCard;
+    }
+    const shown = [...cards.querySelectorAll(".product-card")].filter(
+      (card) => !card.hidden,
+    ).length;
+    let empty = cards.querySelector(".stock-empty");
+    if (!empty) {
+      empty = make(
+        "p",
+        t(all.length ? "noProducts" : "emptyCatalog"),
+        "panel stock-empty",
+      );
+      cards.append(empty);
+    }
+    empty.hidden = shown > 0;
+    result.textContent = t("filtersResult", { shown, total: all.length });
+  };
+  function list() {
+    search.value = current.search;
+    unchecked.checked = Boolean(current.onlyUnchecked);
+    const changes = conflicts(record.snapshot, record.drafts);
+    const uncheckedIds = new Set(
+      countingProgress(record.snapshot, record.drafts).uncheckedIds,
+    );
+    const visible = filterProducts(all, current).filter(
+      (product) => !current.onlyUnchecked || uncheckedIds.has(product.id),
+    );
+    cards.replaceChildren();
+    const failed = (record.lastResult?.failed || []).filter(
+      (item) => record.drafts[item.id]?.editVersion === item.editVersion,
+    );
+    conflictBox.hidden = !changes.length && !failed.length;
+    conflictBox.replaceChildren();
+    if (changes.length) {
+      conflictBox.append(
+        make("h2", t("conflictTitle")),
+        make("p", t("conflictHelp"), "help"),
+      );
+      for (const change of changes)
+        conflictBox.append(
+          make("p", t(change.reason), "error"),
+          button(
+            `${t("review")} · ${productName(change.product || { id: change.id })}`,
+            () => reviewConflict(change),
+          ),
+        );
+    }
+    for (const item of failed) {
+      const product = all.find((product) => product.id === item.id);
+      conflictBox.append(
+        make(
+          "p",
+          t("productCountError", {
+            name: product ? productName(product) : item.id,
+            error: t(errorKey(item.error)),
+          }),
+          "error",
+        ),
+      );
+    }
+    for (const product of visible)
+      cards.append(
+        productCard(
+          product,
+          changes.some((change) => change.id === product.id),
+        ),
+      );
+    updateChips();
+    updateStockProgress();
+    controls();
+  }
+  unchecked.addEventListener("change", () => {
+    current.onlyUnchecked = unchecked.checked;
+    list();
+  });
+  search.addEventListener("input", () => {
+    current.search = search.value;
+    list();
+  });
+  list();
+}
+function openStockFilters() {
+  const previousScroll = window.scrollY;
+  const current = filters.stock;
+  let resetAll = false;
+  const dialog = modal(
+    "filtersButton",
+    (root) => {
+      const zones = [
+        ["", t("allLocations")],
+        ...(record.snapshot.zones || []).map((zone) => [
+          zone.id,
+          zoneName(zone.id),
+        ]),
+      ];
+      if (
+        (record.snapshot.products || []).some(
+          (product) => !product.deleted && !product.zones?.length,
+        )
+      )
+        zones.push(["unassigned", t("unassigned")]);
+      const catalogCategories = record.snapshot.categories || [
+        ...new Set(
+          (record.snapshot.products || [])
+            .filter((product) => !product.deleted)
+            .map((product) => product.category),
+        ),
+      ];
+      const categories = [
+        ["", t("allCategories")],
+        ...catalogCategories.map((category) =>
+          typeof category === "string"
+            ? [category, category]
+            : [category.id, category.name || category.id],
+        ),
+      ];
+      const location = field(root, "location", current.zone, {
+        options: zones,
+      });
+      const category = field(root, "category", current.category, {
+        options: categories,
+      });
+      root.append(
+        button(t("resetFilters"), () => {
+          location.value = "";
+          category.value = "";
+          resetAll = true;
+        }),
+      );
+      return { location, category };
+    },
+    ({ location, category }) => {
+      current.zone = location.value;
+      current.category = category.value;
+      if (resetAll) {
+        current.search = "";
+        current.onlyUnchecked = false;
+      }
+      // A refresh may have replaced the underlying list while this sheet was
+      // open. Render the current screen rather than updating a detached closure.
+      render();
+      window.scrollTo({ top: previousScroll });
+    },
+    "applyFilters",
+  );
+  dialog.dataset.kind = "filters";
+  dialog.classList.add("bottom-sheet");
+}
+function openRecountMenu() {
+  const dialog = modal(
+    "recountMenu",
+    (root) => {
+      root.append(
+        button(t("backup"), () => {
+          downloadBackup();
+          dialog.close();
+        }),
+      );
+      root.append(
+        button(
+          t("clear"),
+          () => {
+            clearDrafts();
+            dialog.close();
+          },
+          "danger",
+        ),
+      );
+    },
+    () => {},
+    "close",
+  );
+  dialog.dataset.kind = "recount";
+  dialog.classList.add("recount-menu-dialog");
+  dialog.querySelector("#dialog-form > .actions > button[type=button]").hidden =
+    true;
+}
+function renderProducts(root) {
+  const current = filters.catalog,
+    all = (record.snapshot.products || []).filter(
+      (product) => !product.deleted,
+    );
+  const filter = make("section", undefined, "panel filters workspace-filters");
   filter.id = "workspace-filters";
-  const searchLabel = make("label", t("search")),
+  const searchLabel = make("label", t("search"), "filter-search"),
     search = make("input");
   search.type = "search";
   search.value = current.search;
   searchLabel.append(search);
   filter.append(searchLabel);
   const selectFilter = (key, title, options, allLabel) => {
-    const label = make("label", t(title)),
+    const label = make("label", t(title), `filter-${key}`),
       select = make("select");
     const blank = make("option", t(allLabel));
     blank.value = "";
@@ -597,23 +879,17 @@ function renderProducts(root) {
     ]),
     "allCategories",
   );
-  filter.append(
-    button(t("resetFilters"), () => {
-      filters[page] = { search: "", zone: "", category: "" };
-      render();
-    }),
-  );
+  const reset = button(t("resetFilters"), () => {
+    filters.catalog = { search: "", zone: "", category: "" };
+    render();
+  });
+  reset.setAttribute("aria-label", t("resetFilters"));
+  filter.append(reset);
   root.append(filter);
   const actions = make("div", undefined, "actions");
-  if (page === "catalog") {
-    const b = button(t("addProduct"), () => catalogForm());
-    b.dataset.serverAction = "true";
-    actions.append(b);
-  } else {
-    actions.append(button(t("clear"), clearDrafts));
-    actions.append(button(t("backup"), downloadBackup));
-    root.append(tip("countHelp"));
-  }
+  const add = button(t("addProduct"), () => catalogForm());
+  add.dataset.serverAction = "true";
+  actions.append(add);
   root.append(actions);
   const result = make("p", undefined, "help");
   result.setAttribute("role", "status");
@@ -685,64 +961,106 @@ function productCard(p, conflicted) {
   const card = make(
     "article",
     undefined,
-    `product-card${p.active ? "" : " inactive"}${conflicted ? " conflict" : ""}`,
+    `product-card${page === "stock" ? " stock-card" : ""}${p.active ? "" : " inactive"}${conflicted ? " conflict" : ""}`,
   );
   card.dataset.productId = p.id;
   const heading = make("div", undefined, "product-heading");
-  heading.append(
-    make("h2", productName(p)),
-    make("span", t(p.active ? "active" : "inactive"), "badge"),
-  );
+  heading.append(make("h2", productName(p)));
+  if (page === "catalog")
+    heading.append(make("span", t(p.active ? "active" : "inactive"), "badge"));
+  else if (!p.active)
+    heading.append(make("span", t("inactive"), "inactive-label"));
   card.append(heading);
-  card.append(
-    make(
-      "p",
-      (p.zones || []).map(zoneName).join(" · ") || t("unassigned"),
-      "locations",
-    ),
-  );
+  if (page === "catalog")
+    card.append(
+      make(
+        "p",
+        (p.zones || []).map(zoneName).join(" · ") || t("unassigned"),
+        "locations",
+      ),
+    );
   if (page === "stock") {
-    const recorded = make("div", undefined, "recorded recorded-compact");
-    const recordedValue = make("span", undefined, "recorded-value");
-    recordedValue.setAttribute("aria-label", t("recorded"));
+    const cardGeneration = generation;
+    const cardKey = recordKey();
+    card.addEventListener("focusout", () =>
+      setTimeout(() => {
+        if (
+          card.isConnected &&
+          page === "stock" &&
+          generation === cardGeneration &&
+          record.snapshot &&
+          recordKey() === cardKey &&
+          !card.contains(document.activeElement)
+        )
+          updateStockProgress(true);
+      }, 0),
+    );
+    const recorded = make("details", undefined, "recorded-details");
+    const recordedValue = make("summary", undefined, "recorded-summary");
+    recordedValue.setAttribute(
+      "aria-label",
+      `${t("recorded")}: ${quantityText(p.last)}${p.last === null || p.last === undefined ? "" : ` ${t(`unitShort_${p.unit}`)}`} · ${t("countedAt")}: ${dateText(p.lastCountedAt)}`,
+    );
     recordedValue.append(
       make("span", t("recordedShort")),
       make(
         "strong",
-        `${quantityText(p.last)}${p.last === null || p.last === undefined ? "" : ` ${t(p.unit) || p.unit}`}`,
+        `${quantityText(p.last)}${p.last === null || p.last === undefined ? "" : ` ${t(`unitShort_${p.unit}`)}`}`,
       ),
     );
     const counted = make(
       "time",
-      `${t("countedAtShort")}: ${dateText(p.lastCountedAt)}`,
+      p.lastCountedAt && Number.isFinite(Date.parse(p.lastCountedAt))
+        ? new Intl.DateTimeFormat(language, {
+            day: "numeric",
+            month: "short",
+          }).format(new Date(p.lastCountedAt))
+        : "",
       "recorded-time",
     );
     counted.title = `${t("countedAt")}: ${dateText(p.lastCountedAt)}`;
     counted.setAttribute("aria-label", counted.title);
     if (p.lastCountedAt) counted.dateTime = p.lastCountedAt;
-    recorded.append(recordedValue, counted);
+    recordedValue.append(counted);
+    recorded.append(
+      recordedValue,
+      make("p", `${t("countedAt")}: ${dateText(p.lastCountedAt)}`, "help"),
+    );
     card.append(recorded);
     const inputs = make("div", undefined, "quantity-grid"),
       d = record.drafts[p.id];
     const zones = d?.zones || p.zones || [],
       expected = zones.length ? zones : ["unassigned"];
     for (const id of expected) {
-      const label = make(
-          "label",
-          `${t("quantity")} · ${zoneName(id)} (${t(p.unit)})`,
-        ),
+      const label = make("label", undefined, "quantity-label"),
         input = make("input");
+      label.append(
+        make(
+          "span",
+          `${["fridge", "freezer", "wardrobe", "cabinet", "shelf", "pickup"].includes(id) ? t(`zoneShort_${id}`) : zoneName(id)}, ${t(`unitShort_${p.unit}`)}`,
+          "quantity-caption",
+        ),
+      );
+      label.title = `${zoneName(id)}, ${t(p.unit)}`;
       input.type = "text";
+      input.className = "quantity-input-square";
+      input.size = 3;
+      input.setAttribute(
+        "aria-label",
+        `${t("quantity")} · ${zoneName(id)} (${t(p.unit)})`,
+      );
       input.inputMode = "decimal";
       input.autocomplete = "off";
       input.dataset.zone = id;
       input.value = d?.locations?.[id]?.value ?? "";
+      input.title = input.value;
       input.addEventListener("input", () =>
         guard(() => {
           const next = editDraft(p, record.drafts[p.id], {
             locations: { [id]: { value: input.value, unit: "BASE" } },
           });
           record.drafts[p.id] = next;
+          input.title = input.value;
           persist();
           input.removeAttribute("aria-invalid");
         }),
@@ -750,7 +1068,67 @@ function productCard(p, conflicted) {
       label.append(input);
       inputs.append(label);
     }
-    card.append(inputs);
+    const countFeedback = make("p", undefined, "count-feedback");
+    countFeedback.setAttribute("role", "status");
+    const updateCountFeedback = () => {
+      const state = draftState(p, record.drafts[p.id]);
+      card.classList.toggle("draft-complete", state.complete && !conflicted);
+      countFeedback.textContent = state.complete
+        ? `${conflicted ? t("review") : `✓ ${t("draftEntered")}`} · ${t("total")}: ${quantityText(state.totalValue)} ${t(`unitShort_${p.unit}`)}`
+        : state.entered
+          ? t("partialDraft")
+          : !record.drafts[p.id] && p.lastCountedAt
+            ? t("saved")
+            : "";
+    };
+    for (const input of inputs.querySelectorAll("input")) {
+      input.enterKeyHint = "next";
+      const error = make("span", "", "error field-error");
+      error.id = `quantity-error-${p.id}-${input.dataset.zone}`;
+      input.setAttribute("aria-describedby", error.id);
+      input.parentElement.append(error);
+      input.addEventListener("input", () => {
+        error.textContent = "";
+        try {
+          if (input.value.trim()) quantityInput(input.value, d?.unit || p.unit);
+          input.removeAttribute("aria-invalid");
+        } catch (failure) {
+          error.textContent = t(errorKey(failure));
+          input.setAttribute("aria-invalid", "true");
+        }
+        updateCountFeedback();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.isComposing) return;
+        event.preventDefault();
+        const fields = [
+          ...document.querySelectorAll(".stock-product-list input[data-zone]"),
+        ].filter((field) => field.getClientRects().length);
+        fields[fields.indexOf(input) + 1]?.focus();
+      });
+    }
+    updateCountFeedback();
+    card.append(inputs, countFeedback);
+    const additional = make("details", undefined, "additional-controls");
+    const detailKey = `${recordKey()}:${p.id}`;
+    additional.open = stockDetails.get(detailKey) === true;
+    const summary = make("summary");
+    const indicator = make("span", undefined, "additional-indicator");
+    summary.append(make("span", t("additional")), indicator);
+    summary.addEventListener("click", () =>
+      stockDetails.set(detailKey, !additional.open),
+    );
+    const updateIndicator = () => {
+      const latest = record.drafts[p.id];
+      const selected =
+        Number(Boolean(latest?.approx)) +
+        Number(Boolean(latest ? latest.low : p.low));
+      indicator.textContent = selected
+        ? t("additionalSelected", { count: selected })
+        : "";
+      indicator.hidden = !selected;
+      additional.classList.toggle("has-selected", selected > 0);
+    };
     const flags = make("div", undefined, "flags");
     for (const key of ["approx", "low"]) {
       const label = make("label", undefined, "check"),
@@ -763,6 +1141,7 @@ function productCard(p, conflicted) {
             [key]: input.checked,
           });
           persist();
+          updateIndicator();
         }),
       );
       label.append(
@@ -771,9 +1150,10 @@ function productCard(p, conflicted) {
       );
       flags.append(label);
     }
-    const footer = make("div", undefined, "product-footer");
-    footer.append(flags);
-    card.append(footer);
+    updateIndicator();
+    additional.append(summary, flags);
+    card.append(additional);
+    return card; // Catalog alone owns status actions and status-changing swipes.
   } else
     card.append(
       make("p", `${p.category || ""} · ${t(p.unit) || p.unit}`, "help"),
@@ -858,6 +1238,8 @@ function modal(title, build, onSubmit, submitLabel = "save") {
   const dialog = $("#workspace-dialog"),
     form = $("#dialog-form");
   opener = document.activeElement;
+  dialog.classList.remove("bottom-sheet", "recount-menu-dialog");
+  delete dialog.dataset.kind;
   form.replaceChildren();
   const heading = make("h2", t(title));
   heading.id = "dialog-title";
@@ -967,6 +1349,15 @@ function confirmSubmission() {
         summary.append(box);
       }
       root.append(summary);
+      root.append(
+        make(
+          "p",
+          t("submissionSummary", {
+            entered: preview.summary.entered,
+            total: preview.summary.entered + preview.summary.uncounted,
+          }),
+        ),
+      );
       const list = make("ul", undefined, "confirmation-list");
       for (const item of preview.items) {
         const p = record.snapshot.products.find((p) => p.id === item.id);
@@ -1129,14 +1520,23 @@ function renderNotification() {
     all[record.notification.id] = record.notification;
   const list = Object.values(all).filter(
     (n) =>
-      n.id === record.notification?.id ||
-      ["READY", "FAILED", "UNKNOWN"].includes(n.status),
+      (n.id === record.notification?.id ||
+        ["READY", "FAILED", "UNKNOWN"].includes(n.status)) &&
+      !(n.status === "SENT" && record.dismissedNotifications?.[n.id]),
   );
   panel.hidden = !list.length;
+  panel.classList.toggle(
+    "notification-compact",
+    list.every((item) => item.status === "SENT"),
+  );
   if (!list.length) return;
-  panel.replaceChildren(make("h2", t("notification")));
+  panel.replaceChildren();
+  panel.setAttribute("aria-label", t("notification"));
+  panel.setAttribute("role", "status");
+  if (list.some((item) => item.status !== "SENT"))
+    panel.append(make("h2", t("notification")));
   for (const notification of list) {
-    const section = make("section");
+    const section = make("section", undefined, "notification-item");
     const key =
       {
         READY: "telegramReady",
@@ -1147,6 +1547,34 @@ function renderNotification() {
         EMPTY: "telegramEmpty",
       }[notification.status] || "telegramUnknown";
     section.append(make("p", t(key)));
+    if (notification.status === "SENT") {
+      const noticeGeneration = generation;
+      const noticeKey = recordKey();
+      const dismiss = button(
+        t("dismissNotification"),
+        () => {
+          if (
+            noticeGeneration !== generation ||
+            !record.snapshot ||
+            noticeKey !== recordKey()
+          )
+            return;
+          const candidate = structuredClone(record);
+          candidate.dismissedNotifications = {
+            ...(candidate.dismissedNotifications || {}),
+            [notification.id]: true,
+          };
+          persist(candidate);
+          record = candidate;
+          renderNotification();
+          $("#view-heading").focus({ preventScroll: true });
+        },
+        "notification-dismiss",
+      );
+      dismiss.dataset.dismissNotification = notification.id;
+      dismiss.setAttribute("aria-label", t("dismissNotificationLabel"));
+      section.append(dismiss);
+    }
     if (["READY", "FAILED", "UNKNOWN"].includes(notification.status)) {
       const check = notification.status === "UNKNOWN";
       const b = button(t(check ? "checkDelivery" : "retryNotification"), () =>
@@ -1795,7 +2223,7 @@ function renderTelegramSettings(root) {
     if (!confirm(t("confirmTelegramTest"))) return;
     const epoch = generation;
     flash("telegramTestRunning");
-    await mutation("workspaceTelegramTest", { language });
+    await mutation("workspaceTelegramTest", { language: "ru" });
     if (epoch === generation && page === "profile") render();
   });
   test.id = "telegram-test";
@@ -1909,23 +2337,28 @@ function keyboardLayout() {
     (visible < fullViewportHeight * 0.75 ||
       window.innerHeight < fullViewportHeight * 0.75);
   document.body.classList.toggle("keyboard-open", Boolean(keyboard));
+  measureLayout();
+  if (keyboard)
+    requestAnimationFrame(() => {
+      if (document.activeElement !== active || !active.isConnected) return;
+      const viewport = window.visualViewport;
+      const top = viewport?.offsetTop || 0;
+      const bottom = top + (viewport?.height || window.innerHeight);
+      const bounds = active.getBoundingClientRect();
+      if (bounds.top < top + 8 || bounds.bottom > bottom - 8)
+        active.scrollIntoView({ block: "center", behavior: "auto" });
+    });
 }
 window.visualViewport?.addEventListener("resize", keyboardLayout);
 window.addEventListener("resize", keyboardLayout);
 document.addEventListener("focusin", keyboardLayout);
 document.addEventListener("focusout", () => setTimeout(keyboardLayout, 0));
 function measureLayout() {
-  const header = document.querySelector("header"),
-    filters = $("#workspace-filters"),
-    navigation = $("#navigation"),
+  const navigation = $("#navigation"),
     countBar = $("#count-bar");
   document.body.style.setProperty(
-    "--workspace-header-height",
-    `${header?.offsetHeight || 0}px`,
-  );
-  document.body.style.setProperty(
-    "--workspace-filters-height",
-    `${filters?.offsetHeight || 0}px`,
+    "--workspace-navigation-height",
+    `${navigation?.offsetHeight || 0}px`,
   );
   document.body.style.setProperty(
     "--workspace-bottom",

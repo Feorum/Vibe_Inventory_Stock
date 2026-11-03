@@ -53,3 +53,40 @@ test("plural forms, validation and connection failures stay in the selected lang
     assert.match(translate("ru", key), /[а-яё]/i);
   }
 });
+
+test("compact counting labels and placeholders remain complete in both languages", () => {
+  for (const key of [
+    "refreshCompact",
+    "filtersButton",
+    "applyFilters",
+    "onlyUnchecked",
+    "countProgress",
+    "additional",
+    "additionalSelected",
+    "recountMenu",
+    "dismissNotification",
+    "dismissNotificationLabel",
+    "removeFilter",
+    "saveCountCompact",
+    "recordedShort",
+  ]) {
+    assert.notEqual(en[key], ru[key], key);
+    assert.match(ru[key], /[а-яё]/i, key);
+    assert.deepEqual(
+      [...en[key].matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort(),
+      [...ru[key].matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort(),
+      key,
+    );
+  }
+  assert.equal(translate("ru", "unitShort_l"), "л");
+  assert.equal(translate("en", "unitShort_l"), "l");
+  assert.equal(
+    translate("ru", "countProgress", { entered: 0, total: 3 }),
+    "Готово 0 из 3",
+  );
+  assert.equal(
+    translate("en", "countProgress", { entered: 2, total: 3 }),
+    "2 of 3 ready",
+  );
+  assert.equal(translate("ru", "onlyUnchecked"), "Только непроверенные");
+});

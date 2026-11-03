@@ -430,6 +430,10 @@ export const ru = {
 
 export const dictionaries = { en, ru };
 Object.assign(en, {
+  draftEntered: "Entered in draft",
+  partialDraft: "Partially entered — complete every location",
+  submissionSummary:
+    "Entered {entered} of {total} products. The rest will remain unchanged.",
   productCountError: "{name}: {error}",
   savedRefreshFailed:
     "The change was saved, but refreshing the database failed. Use Synchronize database; do not repeat the save.",
@@ -471,6 +475,10 @@ Object.assign(en, {
     "Some entries conflicted or failed. Review the listed products. Accepted entries are saved; other drafts are preserved.",
 });
 Object.assign(ru, {
+  draftEntered: "Внесено в черновик",
+  partialDraft: "Внесено частично — заполните все места хранения",
+  submissionSummary:
+    "Внесено {entered} из {total} товаров. Остальные останутся без изменений.",
   productCountError: "{name}: {error}",
   savedRefreshFailed:
     "Изменение сохранено, но обновить базу не удалось. Нажмите «Синхронизировать базу»; не повторяйте сохранение.",
@@ -512,9 +520,35 @@ Object.assign(ru, {
     "Некоторые записи конфликтуют или не сохранены. Проверьте указанные товары. Принятые записи сохранены, остальные черновики оставлены.",
 });
 Object.assign(en, {
-  version: "VARKA · Workspace v4.1",
+  version: "VARKA · Workspace v4.3",
+  refreshCompact: "Refresh",
+  filtersButton: "Filters",
+  applyFilters: "Apply filters",
+  onlyUnchecked: "Only unchecked",
+  countProgress: "{entered} of {total} ready",
+  additional: "Additional",
+  additionalSelected: "{count} selected",
+  recountMenu: "Recount",
+  dismissNotification: "Dismiss",
+  dismissNotificationLabel: "Dismiss delivered notification",
+  removeFilter: "Remove filter: {filter}",
+  saveCountCompact: "Save count",
+  unitShort_pcs: "pcs",
+  unitShort_l: "l",
+  unitShort_kg: "kg",
+  unitShort_g: "g",
+  unitShort_ml: "ml",
+  unitShort_pack: "packs",
+  unitShort_roll: "rolls",
+  zoneShort_fridge: "Fridge",
+  zoneShort_freezer: "Freezer",
+  zoneShort_wardrobe: "Wardrobe",
+  zoneShort_cabinet: "Cabinet",
+  zoneShort_shelf: "Shelf",
+  zoneShort_pickup: "Pickup",
   tipsMode: "Tips",
-  syncQuantityCompact: "Sync quantities",
+  syncQuantityCompact: "Send remains",
+  resetFiltersCompact: "Reset",
   tipsModeHelp:
     "Show optional explanations and usage tips. Safety warnings and errors always remain visible.",
   searchCards: "Search cards",
@@ -525,7 +559,7 @@ Object.assign(en, {
   cardDetails: "Card details",
   clearCardSearch: "Clear card search",
   teamSections: "Team sections",
-  recordedShort: "Recorded",
+  recordedShort: "Last stock",
   countedAtShort: "Counted",
   telegramSettings: "Telegram notifications",
   telegramConfigured:
@@ -564,9 +598,35 @@ Object.assign(en, {
     "Set the bot token and destination chat ID privately in Apps Script Properties.",
 });
 Object.assign(ru, {
-  version: "VARKA · Рабочее пространство v4.1",
+  version: "VARKA · Рабочее пространство v4.3",
+  refreshCompact: "Обновить",
+  filtersButton: "Фильтры",
+  applyFilters: "Применить",
+  onlyUnchecked: "Только непроверенные",
+  countProgress: "Готово {entered} из {total}",
+  additional: "Дополнительно",
+  additionalSelected: "Выбрано: {count}",
+  recountMenu: "Пересчёт",
+  dismissNotification: "Скрыть",
+  dismissNotificationLabel: "Скрыть доставленное уведомление",
+  removeFilter: "Убрать фильтр: {filter}",
+  saveCountCompact: "Сохранить пересчёт",
+  unitShort_pcs: "шт.",
+  unitShort_l: "л",
+  unitShort_kg: "кг",
+  unitShort_g: "г",
+  unitShort_ml: "мл",
+  unitShort_pack: "уп.",
+  unitShort_roll: "рул.",
+  zoneShort_fridge: "Холодильник",
+  zoneShort_freezer: "Морозильник",
+  zoneShort_wardrobe: "Шкаф",
+  zoneShort_cabinet: "Тумба",
+  zoneShort_shelf: "Полка",
+  zoneShort_pickup: "Под стойкой",
   tipsMode: "Подсказки",
   syncQuantityCompact: "Отправить остатки",
+  resetFiltersCompact: "Сбросить",
   tipsModeHelp:
     "Показывать необязательные пояснения и советы по работе. Предупреждения безопасности и ошибки видны всегда.",
   searchCards: "Поиск жёлтых карточек",
@@ -577,7 +637,7 @@ Object.assign(ru, {
   cardDetails: "Подробности карточки",
   clearCardSearch: "Очистить поиск карточек",
   teamSections: "Разделы команды",
-  recordedShort: "Сохранено",
+  recordedShort: "Последний остаток:",
   countedAtShort: "Пересчёт",
   telegramSettings: "Уведомления Telegram",
   telegramConfigured:

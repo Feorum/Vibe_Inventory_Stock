@@ -103,7 +103,7 @@ function harness(overrides = {}) {
           false,
           "Telegram HTTP call must happen after releasing the sheet lock",
         );
-        if (url.endsWith("/sendMessage"))
+        if (url.endsWith("/sendMessage") || url.endsWith("/sendRichMessage"))
           assert.ok(
             [...operations.values()].some(
               (operation) => operation.result.notification.status === "UNKNOWN",
@@ -163,7 +163,7 @@ test("Telegram setup status exposes presence flags, never server credential valu
   assert.equal(h.operations.size, 0);
 });
 
-test("owner Telegram test is explicit, localized and separate from inventory", () => {
+test("owner Telegram test is one Russian RichMessage even with an English interface", () => {
   for (const language of ["en", "ru"]) {
     const h = harness(),
       request = h.request(language);
@@ -173,19 +173,19 @@ test("owner Telegram test is explicit, localized and separate from inventory", (
     assert.equal(result.notification.status, "SENT");
     assert.equal(result.notification.scope, "TEST");
     assert.equal(result.notification.delivered, 1);
+    assert.equal(result.notification.language, "ru");
+    assert.equal(result.notification.format, "RICH");
     assert.equal(result.notification.messages, undefined);
     const payload = JSON.parse(h.calls[0].options.payload);
     assert.equal(payload.chat_id, h.properties.get("TELEGRAM_CHAT_ID"));
     assert.equal(payload.parse_mode, undefined);
-    assert.match(
-      payload.text,
-      language === "ru" ? /Проверка Telegram/ : /Telegram test/,
-    );
+    assert.equal(payload.text, undefined);
+    assert.ok(h.calls[0].url.endsWith("/sendRichMessage"));
+    assert.equal(payload.rich_message.skip_entity_detection, true);
+    assert.match(payload.rich_message.html, /Проверка Telegram/);
     assert.doesNotMatch(
-      payload.text,
-      language === "ru"
-        ? /Inventory|The bot|test notification/
-        : /Остатки|склада|уведомление/,
+      payload.rich_message.html,
+      /Inventory|The bot|test notification/,
     );
     assert.equal(h.operations.get(request.id).kind, "telegramTest");
     assert.equal(h.sheetAccesses(), 0);

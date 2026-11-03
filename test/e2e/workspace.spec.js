@@ -56,6 +56,7 @@ async function mockWorkspace(
       }),
     ],
     notes: [],
+    categories: ["Dairy", "Coffee", "Packaging"],
     cards: [
       {
         id: "A1",
@@ -96,6 +97,7 @@ async function mockWorkspace(
     countResponseLost: false,
     failLoad: false,
     heldCount: null,
+    heldLoad: null,
     telegram: {
       configured: telegramConfigured,
       tokenConfigured: telegramConfigured,
@@ -117,7 +119,7 @@ async function mockWorkspace(
         { id: "fridge", ru: "Холодильник", en: "Refrigerator" },
         { id: "shelf", ru: "Полка", en: "Shelf" },
       ],
-      categories: ["Dairy", "Coffee", "Packaging"],
+      categories: backend.categories,
       notes: backend.notes,
       cards: backend.cards,
       profile: backend.profile,
@@ -169,6 +171,7 @@ async function mockWorkspace(
       await route.fulfill({ json: { ok: false, error: "SIGN_IN_REQUIRED" } });
       return;
     } else if (request.method === "workspaceLoad") {
+      if (backend.heldLoad) await backend.heldLoad;
       if (backend.failLoad) {
         await route.fulfill({
           json: { ok: false, error: "GOOGLE_REQUEST_FAILED" },
@@ -403,6 +406,51 @@ async function login(page, username = email) {
 }
 const card = (page, id) =>
   page.locator(`.product-card[data-product-id="${id}"]`);
+async function openAdditional(page, id) {
+  const details = card(page, id)
+    .locator("details")
+    .filter({
+      has: page.getByLabel("Low", { exact: true }),
+    });
+  await expect(details).toHaveCount(1);
+  if (!(await details.evaluate((element) => element.open)))
+    await details.locator(":scope > summary").click();
+  return details;
+}
+async function applyStockFilters(page, { zone, category } = {}) {
+  await page.locator("#stock-filter-button").click();
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await expect(sheet).toBeVisible();
+  if (zone !== undefined)
+    await sheet
+      .getByRole("combobox", { name: "Location", exact: true })
+      .selectOption(zone);
+  if (category !== undefined)
+    await sheet
+      .getByRole("combobox", { name: "Category", exact: true })
+      .selectOption(category);
+  await sheet
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  await expect(sheet).not.toBeVisible();
+}
+async function resetStockFilters(page) {
+  await page.locator("#stock-filter-button").click();
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await sheet
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await sheet
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  await expect(sheet).not.toBeVisible();
+}
+async function openRecountMenu(page) {
+  await page.locator("#recount-menu").click();
+  const menu = page.locator('#workspace-dialog[data-kind="recount"]');
+  await expect(menu).toBeVisible();
+  return menu;
+}
 async function enterMilk(page, first = "1,25", second = "0") {
   await card(page, "P001").locator('[data-zone="fridge"]').fill(first);
   await card(page, "P001").locator('[data-zone="shelf"]').fill(second);
@@ -445,13 +493,12 @@ test("session-free drafts survive all filters, navigation, refresh, reload, and 
     page.getByRole("button", { name: /Start.*session/i }),
   ).toHaveCount(0);
   await enterMilk(page);
+  await openAdditional(page, "P001");
   await card(page, "P001").getByLabel("Approximate", { exact: true }).check();
   await page.getByLabel("Search products", { exact: true }).fill("coffee");
   await expect(card(page, "P001")).toHaveCount(0);
   await expect(card(page, "P002")).toBeVisible();
-  await page
-    .getByRole("button", { name: "Reset filters", exact: true })
-    .click();
+  await resetStockFilters(page);
   await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
     "1,25",
   );
@@ -504,7 +551,9 @@ test("blank flags never become counts; zero and locale decimals save all entered
   await page.goto(appPath);
   await login(page);
   await enterMilk(page, "1,25", "0");
+  await openAdditional(page, "P001");
   await card(page, "P001").getByLabel("Approximate", { exact: true }).check();
+  await openAdditional(page, "P002");
   await card(page, "P002").getByLabel("Low", { exact: true }).check();
   await card(page, "P003").locator('[data-zone="shelf"]').fill("0");
   await page.getByLabel("Search products", { exact: true }).fill("coffee");
@@ -528,10 +577,9 @@ test("blank flags never become counts; zero and locale decimals save all entered
   ]);
   expect(submitted.items[0].approx).toBe(true);
   expect(submitted.notification.scope).toBe("LOW");
+  expect(submitted.notification.language).toBe("ru");
   expect(submitted.notification.lowIds).toContain("P002");
-  await page
-    .getByRole("button", { name: "Reset filters", exact: true })
-    .click();
+  await resetStockFilters(page);
   await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
     "",
   );
@@ -657,7 +705,10 @@ test("four-page mobile interface has no overflow, accessible names, visible inac
   ).toBeVisible();
   await expect(
     card(page, "P003").getByRole("button", { name: "Activate", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    card(page, "P001").getByText("Active", { exact: true }),
+  ).toHaveCount(0);
   await audit();
   await enterMilk(page);
   await openConfirmation(page);
@@ -700,18 +751,22 @@ test("the full catalog can be searched and location/category filters combine wit
     .getByLabel("Search products", { exact: true })
     .fill("last catalog");
   await expect(card(page, "P137")).toBeVisible();
-  await page
-    .getByRole("combobox", { name: "Location", exact: true })
-    .selectOption("fridge");
+  await applyStockFilters(page, { zone: "fridge" });
   await expect(card(page, "P137")).toBeVisible();
-  await page
-    .getByRole("combobox", { name: "Category", exact: true })
-    .selectOption("Dairy");
+  await applyStockFilters(page, { category: "Dairy" });
   await expect(page.locator(".product-card")).toHaveCount(0);
+  await resetStockFilters(page);
+  await expect(page.locator(".product-card")).toHaveCount(137);
+  await page.locator('[data-view="catalog"]').click();
+  await page
+    .getByLabel("Search products", { exact: true })
+    .fill("last catalog");
+  await expect(page.locator(".product-card")).toHaveCount(1);
   await page
     .getByRole("button", { name: "Reset filters", exact: true })
     .click();
   await expect(page.locator(".product-card")).toHaveCount(137);
+  await expect(page.locator("#message")).not.toHaveClass(/error/);
 });
 
 test("switching authenticated accounts and databases never loads another scope's draft", async ({
@@ -823,14 +878,14 @@ test("clear entered information clears every filtered local draft without changi
   await page.goto(appPath);
   await login(page);
   await enterMilk(page);
+  await openAdditional(page, "P002");
   await card(page, "P002").getByLabel("Low", { exact: true }).check();
   await page.getByLabel("Search products", { exact: true }).fill("coffee");
-  await page
+  const menu = await openRecountMenu(page);
+  await menu
     .getByRole("button", { name: "Clear entered information", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "Reset filters", exact: true })
-    .click();
+  await resetStockFilters(page);
   await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
     "",
   );
@@ -985,12 +1040,36 @@ test("Team adds shared notes and schema-valid Yellow Cards, keeps failed fields,
   expect(backend.cards).toHaveLength(4);
 });
 
-test("status actions support Undo and directional swipes without treating quantity drags or scrolling as status changes", async ({
+test("Stock cannot change active status; Catalog retains Undo and safe directional swipes", async ({
   page,
 }) => {
   const backend = await mockWorkspace(page);
   await page.goto(appPath);
   await login(page);
+  const drag = async (target, dx, dy, pointerId) => {
+    await target.dispatchEvent("pointerdown", {
+      clientX: 150,
+      clientY: 150,
+      pointerId,
+    });
+    await target.dispatchEvent("pointerup", {
+      clientX: 150 + dx,
+      clientY: 150 + dy,
+      pointerId,
+    });
+  };
+  await expect(
+    card(page, "P003").getByRole("button", { name: "Activate", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    card(page, "P001").getByRole("button", { name: "Deactivate", exact: true }),
+  ).toHaveCount(0);
+  await drag(card(page, "P001").locator('[data-zone="fridge"]'), -110, 0, 1);
+  await drag(card(page, "P003"), 110, 0, 2);
+  expect(
+    backend.requests.filter((request) => request.method === "workspaceCatalog"),
+  ).toHaveLength(0);
+  await page.locator('[data-view="catalog"]').click();
   await card(page, "P003")
     .getByRole("button", { name: "Activate", exact: true })
     .click();
@@ -1004,19 +1083,6 @@ test("status actions support Undo and directional swipes without treating quanti
   const before = backend.requests.filter(
     (request) => request.method === "workspaceCatalog",
   ).length;
-  const drag = async (target, dx, dy, pointerId) => {
-    await target.dispatchEvent("pointerdown", {
-      clientX: 150,
-      clientY: 150,
-      pointerId,
-    });
-    await target.dispatchEvent("pointerup", {
-      clientX: 150 + dx,
-      clientY: 150 + dy,
-      pointerId,
-    });
-  };
-  await drag(card(page, "P001").locator('[data-zone="fridge"]'), -110, 0, 3);
   await drag(card(page, "P001"), -100, 120, 4);
   expect(
     backend.requests.filter((request) => request.method === "workspaceCatalog"),
@@ -1031,7 +1097,7 @@ test("status actions support Undo and directional swipes without treating quanti
   ).toBeVisible();
 });
 
-test("compact stock filters remain reachable while scrolling and the sync control keeps a touch-sized compact target", async ({
+test("normal-flow search and a compact fixed save bar leave the header out of the counting view", async ({
   page,
 }) => {
   const backend = await mockWorkspace(page);
@@ -1048,43 +1114,37 @@ test("compact stock filters remain reachable while scrolling and the sync contro
   await login(page);
   await enterMilk(page, "6,25", "0");
   const originalWidth = page.viewportSize().width;
-  for (const width of new Set([320, originalWidth])) {
+  for (const width of new Set([320, 390, originalWidth])) {
     await page.setViewportSize({ width, height: 740 });
     await page.evaluate(() => window.scrollTo(0, 2200));
-    const toolbar = page.locator(".stock-filters");
+    const toolbar = page.getByLabel("Search products", { exact: true });
     await expect(toolbar).toBeVisible();
-    if (width === 320) {
-      const toolbarSize = await toolbar.boundingBox();
-      const searchSize = await page
-        .getByLabel("Search products", { exact: true })
-        .boundingBox();
-      const locationSize = await page
-        .getByRole("combobox", { name: "Location", exact: true })
-        .boundingBox();
-      expect(toolbarSize.height).toBeLessThan(180);
-      expect(searchSize.y).toBeLessThan(locationSize.y);
-    }
+    await expect(
+      page.locator("#count-bar input, #count-bar select"),
+    ).toHaveCount(0);
     await expect
       .poll(async () => {
         const header = await page.locator("header").boundingBox();
         const filter = await toolbar.boundingBox();
+        const dock = await page.locator("#count-bar").boundingBox();
+        const nav = await page.locator("#navigation").boundingBox();
+        const sync = await page.locator("#synchronize-quantity").boundingBox();
         return Boolean(
+          header &&
+          header.y + header.height <= 0 &&
           filter &&
-          filter.y >= header.y + header.height - 2 &&
-          filter.y + filter.height < 740,
+          dock &&
+          nav &&
+          sync &&
+          filter.y + filter.height <= 0 &&
+          dock.height < 110 &&
+          dock.y > 740 * 0.5 &&
+          dock.y + dock.height <= nav.y + 2 &&
+          sync.y >= dock.y - 1 &&
+          sync.y + sync.height <= dock.y + dock.height + 1,
         );
       })
       .toBe(true);
-    for (const field of [
-      page.getByLabel("Search products", { exact: true }),
-      page.getByRole("combobox", { name: "Location", exact: true }),
-      page.getByRole("combobox", { name: "Category", exact: true }),
-    ]) {
-      const bounds = await field.boundingBox();
-      expect(bounds.y).toBeGreaterThanOrEqual(0);
-      expect(bounds.y + bounds.height).toBeLessThan(740);
-      expect(bounds.height).toBeGreaterThanOrEqual(44);
-    }
     const sync = await page.locator("#synchronize-quantity").boundingBox();
     expect(sync.height).toBeGreaterThanOrEqual(44);
     expect(sync.height).toBeLessThan(75);
@@ -1095,34 +1155,128 @@ test("compact stock filters remain reachable while scrolling and the sync contro
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
+    await page.evaluate(() =>
+      window.scrollTo(0, document.documentElement.scrollHeight),
+    );
+    const last = card(page, "PX72");
+    const lastBounds = await last.boundingBox();
+    const dockBounds = await page.locator("#count-bar").boundingBox();
+    expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(
+      dockBounds.y + 2,
+    );
+    await last.locator('[data-zone="shelf"]').click();
+    await expect(last.locator('[data-zone="shelf"]')).toBeFocused();
   }
   await page.getByLabel("Search products", { exact: true }).fill("milk");
-  await page
-    .getByRole("combobox", { name: "Location", exact: true })
-    .selectOption("fridge");
-  await page
-    .getByRole("combobox", { name: "Category", exact: true })
-    .selectOption("Dairy");
+  await applyStockFilters(page, { zone: "fridge", category: "Dairy" });
   await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
     "6,25",
   );
-  await page
-    .getByRole("button", { name: "Reset filters", exact: true })
-    .click();
+  await resetStockFilters(page);
   await page.setViewportSize({ width: 320, height: 740 });
   await expect(card(page, "P001")).toBeVisible();
   const cardSize = await card(page, "P001").boundingBox();
   expect(cardSize.height).toBeLessThan(350);
   expect(cardSize.width).toBeLessThanOrEqual(320);
   await page.screenshot({
-    path: test.info().outputPath("stock-compact-320.png"),
+    path: test.info().outputPath("compact-counting-320.png"),
   });
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .locator("#workspace")
+    .getByRole("combobox", { name: "Language", exact: true })
+    .selectOption("ru");
+  await page.locator('[data-view="stock"]').click();
+  await expect(page.locator("#synchronize-quantity")).toContainText(
+    "Сохранить пересчёт",
+  );
   await page.evaluate(() => (document.documentElement.style.zoom = "2"));
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  for (const field of await page
+    .locator("#count-bar input, #count-bar select, #synchronize-quantity")
+    .all()) {
+    const bounds = await field.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(-1);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(321);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(740);
+  }
+  expect(backend.saves).toBe(0);
+});
+
+test("square quantity boxes preserve zero, three digits, and larger decimal drafts across refresh and reload", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto(appPath);
+  await login(page);
+  for (const input of await page.locator(".product-card [data-zone]").all()) {
+    const bounds = await input.boundingBox();
+    expect(bounds.width).toBeGreaterThanOrEqual(44);
+    expect(bounds.width).toBeLessThanOrEqual(64);
+    expect(Math.abs(bounds.width - bounds.height)).toBeLessThanOrEqual(1);
+    expect(await input.evaluate((element) => element.maxLength)).toBe(-1);
+    await expect(input).toHaveAttribute("inputmode", "decimal");
+  }
+  await enterMilk(page, "123", "0");
+  await card(page, "P002").locator('[data-zone="shelf"]').fill("0");
+  await card(page, "P003").locator('[data-zone="shelf"]').fill("999");
+  await card(page, "P001").locator('[data-zone="fridge"]').fill("1234,5678");
+  await page
+    .getByRole("button", { name: "Synchronize database", exact: true })
+    .click();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "1234,5678",
+  );
+  await page.reload();
+  await login(page);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "1234,5678",
+  );
+  await expect(card(page, "P002").locator('[data-zone="shelf"]')).toHaveValue(
+    "0",
+  );
+  await expect(card(page, "P003").locator('[data-zone="shelf"]')).toHaveValue(
+    "999",
+  );
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(3);
+  expect(backend.products[0].last).toBe(1234.5678);
+  expect(backend.products[1].last).toBe(0);
+  expect(backend.products[2].last).toBe(999);
+});
+
+test("ordinary search remains editable with a short keyboard viewport and never enters the save bar", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto(appPath);
+  await login(page);
+  const search = page.getByLabel("Search products", { exact: true });
+  await search.focus();
+  await page.setViewportSize({ width: 320, height: 400 });
+  await search.fill("milk");
+  await expect(search).toBeFocused();
+  await expect(page.locator("#count-bar input, #count-bar select")).toHaveCount(
+    0,
+  );
+  const bounds = await search.boundingBox();
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(400);
+  await expect(card(page, "P001")).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(1);
+  await resetStockFilters(page);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await enterMilk(page, "7,5", "0");
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "7,5",
+  );
   expect(backend.saves).toBe(0);
 });
 
@@ -1443,5 +1597,318 @@ test("a lost Telegram test response resumes its original request without deliver
   expect(requests).toHaveLength(2);
   expect(new Set(requests.map((request) => request.body.id)).size).toBe(1);
   expect(backend.telegramTestSends).toBe(1);
+  expect(backend.saves).toBe(0);
+});
+
+test("filter sheet applies transactionally, restores focus, supports category objects and removable chips", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.categories = [
+    { id: "Dairy", name: "Dairy products" },
+    { id: "Coffee", name: "Coffee products" },
+  ];
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "2,5", "0");
+  const trigger = page.locator("#stock-filter-button");
+  await trigger.click();
+  const sheet = page.locator('#workspace-dialog[data-kind="filters"]');
+  await expect(sheet).toHaveClass(/bottom-sheet/);
+  await sheet
+    .getByRole("combobox", { name: "Category", exact: true })
+    .selectOption({ label: "Coffee products" });
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(trigger).toBeFocused();
+  await expect(page.locator(".product-card:visible")).toHaveCount(3);
+  await applyStockFilters(page, { zone: "fridge", category: "Dairy" });
+  await expect(trigger).toBeFocused();
+  await expect(page.locator(".product-card:visible")).toHaveCount(1);
+  await expect(
+    page.locator('#selected-stock-filters [data-filter="zone"]'),
+  ).toContainText("Refrigerator");
+  await page.locator('#selected-stock-filters [data-filter="zone"]').click();
+  await expect(
+    page.locator('#selected-stock-filters [data-filter="zone"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('#selected-stock-filters [data-filter="category"]'),
+  ).toHaveCount(1);
+  await page.getByLabel("Search products", { exact: true }).fill("milk");
+  await page.getByLabel("Only unchecked", { exact: true }).check();
+  await trigger.click();
+  await sheet
+    .getByRole("button", { name: "Reset filters", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await expect(page.getByLabel("Search products", { exact: true })).toHaveValue(
+    "milk",
+  );
+  await expect(
+    page.getByLabel("Only unchecked", { exact: true }),
+  ).toBeChecked();
+  await resetStockFilters(page);
+  await expect(page.getByLabel("Search products", { exact: true })).toHaveValue(
+    "",
+  );
+  await expect(
+    page.getByLabel("Only unchecked", { exact: true }),
+  ).not.toBeChecked();
+  await expect(page.locator(".product-card:visible")).toHaveCount(3);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "2,5",
+  );
+  // Apply after an intervening refresh must update the current, not detached list.
+  backend.categories = undefined;
+  const refreshed = page.waitForResponse(
+    (response) =>
+      response.request().postData()?.includes('"method":"workspaceLoad"') &&
+      response.request().method() === "POST",
+  );
+  await page.locator("#refresh").click();
+  await refreshed;
+  let releaseLoad;
+  backend.heldLoad = new Promise((resolve) => (releaseLoad = resolve));
+  const secondRefresh = page.waitForResponse(
+    (response) =>
+      response.request().postData()?.includes('"method":"workspaceLoad"') &&
+      response.request().method() === "POST",
+  );
+  await page.locator("#refresh").click();
+  await trigger.click();
+  await sheet
+    .getByRole("combobox", { name: "Category", exact: true })
+    .selectOption("Coffee");
+  // The app allows the pending background read to finish while a sheet is open.
+  releaseLoad();
+  await secondRefresh;
+  await expect(page.locator("#refresh")).not.toBeDisabled();
+  await expect(page.locator("#message")).toContainText("Database refreshed");
+  await sheet
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  await expect(card(page, "P002")).toBeVisible();
+  await expect(card(page, "P001")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  expect(backend.saves).toBe(0);
+});
+
+test("unchecked progress preserves typing focus, distinguishes zero and incomplete flags, and never narrows saving", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await expect(page.locator("#stock-progress")).toHaveText("0 of 3 ready");
+  await openAdditional(page, "P002");
+  await card(page, "P002").getByLabel("Low", { exact: true }).check();
+  await expect(
+    card(page, "P002").locator(".additional-indicator"),
+  ).toContainText("1 selected");
+  await page.getByLabel("Only unchecked", { exact: true }).check();
+  const first = card(page, "P001").locator('[data-zone="fridge"]');
+  const second = card(page, "P001").locator('[data-zone="shelf"]');
+  await first.fill("0");
+  await expect(page.locator("#stock-progress")).toHaveText("0 of 3 ready");
+  await second.fill("0");
+  await expect(page.locator("#stock-progress")).toHaveText("1 of 3 ready");
+  await expect(second).toBeFocused();
+  await second.pressSequentially("123");
+  await expect(second).toHaveValue("0123");
+  await expect(second).toBeFocused();
+  await second.fill("0");
+  const coffee = card(page, "P002").locator('[data-zone="shelf"]');
+  await coffee.fill("1,25");
+  await expect(coffee).toBeFocused();
+  await expect(card(page, "P001")).not.toBeVisible();
+  await expect(page.locator("#count-progress")).toHaveText("2 of 3 ready");
+  const cups = card(page, "P003").locator('[data-zone="shelf"]');
+  await cups.fill("-1");
+  await expect(coffee).not.toBeVisible();
+  await expect(page.locator("#stock-progress")).toHaveText("2 of 3 ready");
+  await cups.fill("0.5");
+  await expect(page.locator("#stock-progress")).toHaveText("2 of 3 ready");
+  await cups.fill("");
+  await page.getByLabel("Search products", { exact: true }).fill("cups");
+  await openConfirmation(page);
+  await expect(
+    page.getByRole("dialog").locator(".summary > div").first(),
+  ).toHaveText("2Entered");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Send", exact: true })
+    .click();
+  await expect.poll(() => backend.saves).toBe(2);
+  const submitted = backend.requests.find(
+    (request) => request.method === "workspaceCount",
+  ).body;
+  expect(submitted.items.map((item) => item.id).sort()).toEqual([
+    "P001",
+    "P002",
+  ]);
+  expect(backend.products[0].last).toBe(0);
+  expect(backend.products[1].last).toBe(1.25);
+  expect(backend.products[2].last).toBe(5);
+});
+
+test("compact delivered notices dismiss per request while later failures and unknown deliveries remain visible", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page, "3", "0");
+  await send(page);
+  const notices = page.locator("#notification-panel");
+  await expect(notices).toContainText("Telegram notification sent.");
+  await expect(notices).toHaveClass(/notification-compact/);
+  await notices
+    .getByRole("button", {
+      name: "Dismiss delivered notification",
+      exact: true,
+    })
+    .click();
+  await expect(notices).not.toBeVisible();
+  await page.reload();
+  await login(page);
+  await expect(notices).not.toBeVisible();
+  backend.notificationFail = true;
+  await enterMilk(page, "4", "0");
+  await send(page);
+  await expect(notices).toContainText("Telegram failed");
+  await expect(
+    notices.getByRole("button", {
+      name: "Dismiss delivered notification",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.locator('[data-view="team"]').click();
+  await expect(
+    notices.getByRole("button", {
+      name: "Retry notification only",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.locator('[data-view="stock"]').click();
+  backend.notificationFail = false;
+  backend.notificationUnknown = true;
+  await enterMilk(page, "5", "0");
+  await send(page);
+  await expect(notices).toContainText("Telegram delivery is unconfirmed");
+  await expect(
+    notices.getByRole("button", { name: "Check delivery status", exact: true }),
+  ).toBeVisible();
+  await expect(
+    notices.getByRole("button", {
+      name: "Retry notification only",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.reload();
+  await login(page);
+  await expect(notices).toContainText("Telegram failed");
+  await expect(notices).toContainText("Telegram delivery is unconfirmed");
+  expect(backend.saves).toBe(3);
+  expect(backend.telegramSends).toBe(1);
+});
+
+test("compact Russian cards expose full timestamps, selected flags, safe backup menu and keyboard clearance", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.setViewportSize({ width: 390, height: 740 });
+  await page.goto(appPath);
+  await login(page);
+  await page.locator('[data-view="profile"]').click();
+  await page
+    .locator("#workspace")
+    .getByRole("combobox", { name: "Language", exact: true })
+    .selectOption("ru");
+  await page.locator('[data-view="stock"]').click();
+  await expect(page.locator("#refresh")).toHaveText("Обновить");
+  const milk = card(page, "P001");
+  await expect(milk.locator(".quantity-caption").first()).toHaveText(
+    "Холодильник, л",
+  );
+  await expect(milk.getByText("Активен", { exact: true })).toHaveCount(0);
+  const recorded = milk.locator(".recorded-details");
+  await expect(recorded.locator("summary")).toContainText("Последний остаток:");
+  await recorded.locator("summary").click();
+  await expect(recorded.locator("p")).toContainText("2026");
+  const additional = milk.locator(".additional-controls");
+  await additional.locator("summary").click();
+  await milk.getByLabel("Примерно", { exact: true }).check();
+  await expect(additional.locator("summary")).toContainText("Выбрано: 1");
+  await page.screenshot({
+    path: test.info().outputPath("compact-counting-390-ru.png"),
+  });
+  await page.locator("#stock-filter-button").click();
+  await page.screenshot({
+    path: test.info().outputPath("compact-filters-390-ru.png"),
+  });
+  await page.keyboard.press("Escape");
+  await page.locator("#recount-menu").click();
+  const menu = page.locator('#workspace-dialog[data-kind="recount"]');
+  const downloadReady = page.waitForEvent("download");
+  await menu
+    .getByRole("button", {
+      name: "Скачать резервную копию пересчёта",
+      exact: true,
+    })
+    .click();
+  expect((await downloadReady).suggestedFilename()).toMatch(/\.json$/);
+  const field = milk.locator('[data-zone="fridge"]');
+  await field.focus();
+  await page.setViewportSize({ width: 390, height: 400 });
+  await field.fill("123");
+  await expect(field).toBeFocused();
+  await expect(page.locator("#count-bar")).not.toBeVisible();
+  await expect(page.locator("#navigation")).not.toBeVisible();
+  const bounds = await field.boundingBox();
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(400);
+  expect(backend.saves).toBe(0);
+});
+
+test("count feedback distinguishes partial drafts, shows totals and local errors, and Next keeps draft values", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  await page.goto(appPath);
+  await login(page);
+  const milk = card(page, "P001");
+  const fridge = milk.locator('[data-zone="fridge"]');
+  const shelf = milk.locator('[data-zone="shelf"]');
+  await fridge.fill("1,25");
+  await expect(milk.locator(".count-feedback")).toContainText(
+    "Partially entered",
+  );
+  await expect(milk).not.toHaveClass(/draft-complete/);
+  await expect(fridge).toHaveAttribute("enterkeyhint", "next");
+  await fridge.press("Enter");
+  await expect(shelf).toBeFocused();
+  await shelf.fill("-1");
+  await expect(shelf).toHaveAttribute("aria-invalid", "true");
+  await expect(shelf).toHaveValue("-1");
+  await expect(shelf.locator("..").locator(".field-error")).toContainText(
+    "nonnegative",
+  );
+  await shelf.fill("2.25");
+  await expect(shelf).not.toHaveAttribute("aria-invalid", "true");
+  await expect(milk).toHaveClass(/draft-complete/);
+  await expect(milk.locator(".count-feedback")).toContainText(
+    "Entered in draft",
+  );
+  await expect(milk.locator(".count-feedback")).toContainText("3.5 l");
+  await page.locator('[data-view="catalog"]').click();
+  await page.locator('[data-view="stock"]').click();
+  await expect(fridge).toHaveValue("1,25");
+  await expect(shelf).toHaveValue("2.25");
+  await openConfirmation(page);
+  await expect(page.getByRole("dialog")).toContainText(
+    "Entered 1 of 3 products. The rest will remain unchanged.",
+  );
   expect(backend.saves).toBe(0);
 });

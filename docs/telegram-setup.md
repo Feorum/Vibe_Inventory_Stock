@@ -4,7 +4,7 @@ Bot credentials stay in **private Apps Script Properties**, never in the PWA, Go
 
 ## Update the working application
 
-For Workspace v4.1, replace the contents of these existing **script files** with the matching repository source:
+For a first upgrade to the Telegram setup controls, replace the contents of these existing **script files** with the matching repository source:
 
 - `apps-script/PwaBridge.gs`
 - `apps-script/Workspace.gs`
@@ -12,7 +12,9 @@ For Workspace v4.1, replace the contents of these existing **script files** with
 
 Keep the original five files and the current `doGet` hook. Keep `PwaBridge.html` as the separate **HTML** file: it must start with `<!doctype html>`. Do not paste `.gs` code into it. No new table, migration, installer, or stock import is needed if Workspace v4 is already installed.
 
-Save, then **Deploy → Manage deployments → Edit → New version → Deploy**, using the same `/exec` URL. Publish the frontend using the existing manual **Deploy Google-mode PWA** GitHub Actions workflow. Reload online after the service worker updates. The footer identifies Workspace v4.1. Do not clear browser data; saved counts, pending requests, and recovery archives are retained.
+Save, then **Deploy → Manage deployments → Edit → New version → Deploy**, using the same `/exec` URL. Publish the frontend using the existing manual **Deploy Google-mode PWA** GitHub Actions workflow. Reload online after the service worker updates. The current compact frontend identifies itself as Workspace v4.3. Do not clear browser data; saved counts, pending requests, and recovery archives are retained.
+
+If v4.1 already works, the v4.2 Big Message update needs **only the updated `WorkspaceNotifications.gs`** and Pages frontend. The bridge dispatcher and workbook schema are unchanged. The existing bot token/chat ID are reused.
 
 ## 1. Create or use your Telegram bot
 
@@ -49,7 +51,7 @@ Telegram only retains updates for a limited time; discovery is not a complete hi
 
 Sign in to the PWA with the authorized **owner account**, refresh the database, and open **Profile → Telegram notifications**.
 
-The panel shows missing/configured status without exposing credential values. Open its collapsed setup instructions if needed. Choose **Send test notification** and confirm the destination test. The message is localized using the app's current language. This action changes **no inventory quantities or count timestamps**.
+The panel shows missing/configured status without exposing credential values. Open its collapsed setup instructions if needed. Choose **Send test notification** and confirm the destination test. The message is a Russian native RichMessage regardless of the app's interface language, so it also verifies the new Big Message delivery path. This action changes **no inventory quantities or count timestamps**.
 
 - **Delivered:** Telegram returned a confirmed message ID.
 - **Rejected:** the server records a definite Telegram rejection. Fix bot/chat permissions or credentials, refresh the database, and use **Retry test notification only**. The same saved operation ID is retained.
@@ -62,9 +64,13 @@ Changing a token or chat later requires another explicit delivery check. A past 
 
 ## Stock notifications and reminders
 
+New notifications are always Russian. Each report is sent as **one native Telegram RichMessage**, using `sendRichMessage` with an escaped `rich_message.html` payload and `skip_entity_detection: true`, matching the original application's rich-report format. It is not split into ordinary text messages or published on an external website. Long-report tests verify the full selected catalog is retained. User-entered names and notes are preserved, with the stored Russian product name preferred.
+
 The **Synchronize quantity** confirmation still saves every valid entered count, independently of the Telegram scope. Choose **Entire list**, **Only entered items**, or **Only items marked Low**. Notifications are based on the frozen full-catalog submission and accepted server results, not the visible filters. Old quantities are labeled as previously recorded. A notification failure never rolls back inventory; retry only the notification.
 
-Fixed-interval scheduled recount reminders remain optional. Install them with **`installWorkspaceReminders`**, set private `WORKSPACE_REMINDER_LANGUAGE` to `ru` or `en`, and review the old `refreshAndAlert_` timer to avoid duplicate legacy reports. Do not remove unrelated form triggers. See [the scheduled reminder guide](google-workspace.md#scheduled-telegram-reminders).
+Fixed-interval scheduled recount reminders remain optional and now also use Russian RichMessage content. Install them with **`installWorkspaceReminders`** and review the old `refreshAndAlert_` timer to avoid duplicate legacy reports. The older `WORKSPACE_REMINDER_LANGUAGE` setting does not change the language of newly prepared messages. Do not remove unrelated form triggers. See [the scheduled reminder guide](google-workspace.md#scheduled-telegram-reminders).
+
+Old pending plans keep their frozen original format and language, including previously split text messages. A retry must not reinterpret an already sent or ambiguous operation. If Telegram rejects the rich format or its contents, the database remains saved and the notification shows a separate failure; it does not silently truncate, publish publicly, or send several fallback messages.
 
 ## Verification limits
 

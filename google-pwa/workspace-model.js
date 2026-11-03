@@ -146,6 +146,27 @@ export function conflicts(snapshot, drafts = {}) {
   return result;
 }
 
+// Counting progress describes this device's current draft, not historical
+// database quantities. Keep it independent of search/location/category filters.
+// A stale count still needs review, even when all its quantities are valid.
+export function countingProgress(snapshot, drafts = {}) {
+  const products = (snapshot?.products || []).filter((p) => !p.deleted);
+  const stale = new Set(conflicts(snapshot, drafts).map((item) => item.id));
+  const uncheckedIds = products
+    .filter(
+      (product) =>
+        stale.has(product.id) ||
+        !draftState(product, drafts[product.id]).complete,
+    )
+    .map((product) => product.id);
+  return {
+    total: products.length,
+    entered: products.length - uncheckedIds.length,
+    uncounted: uncheckedIds.length,
+    uncheckedIds,
+  };
+}
+
 export function filterProducts(products, filters = {}) {
   const search = String(filters.search || "")
     .trim()
@@ -204,7 +225,8 @@ export function buildSubmission(snapshot, drafts, options = {}) {
     items,
     notification: {
       scope,
-      language: options.language === "ru" ? "ru" : "en",
+      // Report language is a café-wide requirement, not the interface language.
+      language: "ru",
       lowIds,
       // Freeze the report's entire catalog at Send, including uncounted and
       // inactive products. These cached quantities are REPORT-ONLY: only items

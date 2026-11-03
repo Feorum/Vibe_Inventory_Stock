@@ -12,7 +12,9 @@ The current Google-backed app is a **four-page, session-free workspace**: Stock,
 
 The [older Google-mode guide](docs/google-mode.md) documents the original bridge and legacy session recovery. The previous interface remains at `legacy.html` to finish pending submissions without discarding their saved requests. The Node/SQLite application below remains separate and unchanged; Google mode does not mirror Sheets into SQLite. No rented host is needed.
 
-Workspace v4.1 adds sticky phone filters, compact counts/cards, separate searchable Yellow Cards, and an opt-in Tips mode. For bot credentials, chat-ID discovery, and an owner-only delivery test, see [Telegram setup](docs/telegram-setup.md).
+The phone workspace includes separate searchable Yellow Cards and an opt-in Tips mode. For bot credentials, chat-ID discovery, and an owner-only delivery test, see [Telegram setup](docs/telegram-setup.md).
+
+Workspace v4.3 puts search above the products, moves location/category options into a filter sheet, and uses compact counting cards, an unchecked-items view, and a small bottom save bar. Draft maintenance lives in the Recount menu; successful Telegram delivery can be dismissed without hiding failed deliveries. Square quantity boxes never truncate saved numbers. New Telegram notifications remain single Russian native RichMessages. See the [current upgrade notes](docs/google-workspace.md#workspace-v43--compact-counting-screen).
 
 ## Run
 

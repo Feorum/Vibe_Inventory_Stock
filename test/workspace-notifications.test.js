@@ -198,17 +198,17 @@ const request = (scope = "ALL", language = "en") => ({
 test("workspace Telegram scopes use full catalog, accepted recounts, and immutable manual Low snapshot", () => {
   const h = harness();
   const all = h.seed(request(), result, products).messages.join("\n");
-  assert.match(all, /P001 · Milk \[Approximate\]\nFresh recount: 2.5 l/);
-  assert.match(all, /P002 · Cups \[Inactive\]\nPreviously recorded: 0 pcs/);
-  assert.match(all, /P003 · Coffee \[Low\]\nNot counted/);
-  assert.doesNotMatch(all, /Cups \[Inactive, Low/);
+  assert.match(all, /P001 · Молоко \[Примерно\]<br>Пересчитано сейчас: 2,5 л/);
+  assert.match(all, /P002 · Чашки \[Неактивный\]<br>Ранее записано: 0 шт\./);
+  assert.match(all, /P003 · Кофе \[Мало\]<br>Не пересчитано/);
+  assert.doesNotMatch(all, /Чашки \[Неактивный, Мало/);
   const entered = h
     .seed(request("ENTERED"), result, products)
     .messages.join("\n");
   assert.match(entered, /P001/);
   assert.doesNotMatch(entered, /P002|P003/);
   const low = h.seed(request("LOW"), result, products).messages.join("\n");
-  assert.match(low, /P003 · Coffee \[Low\]/);
+  assert.match(low, /P003 · Кофе \[Мало\]/);
   assert.doesNotMatch(low, /P001|P002/);
   assert.equal(result.accepted[0].last, "2.5");
 });
@@ -218,10 +218,10 @@ test("workspace Russian Telegram text is consistent and preserves decimals/user 
   const text = h
     .seed(request("ALL", "ru"), result, products)
     .messages.join("\n");
-  assert.match(text, /Остатки\nВесь каталог/);
-  assert.match(text, /Молоко \[Примерно\]\nПересчитано сейчас: 2,5 л/);
-  assert.match(text, /Чашки \[Неактивный\]\nРанее записано: 0 шт\./);
-  assert.match(text, /Кофе \[Мало\]\nНе пересчитано/);
+  assert.match(text, /Остатки<\/h3><p>Весь каталог/);
+  assert.match(text, /Молоко \[Примерно\]<br>Пересчитано сейчас: 2,5 л/);
+  assert.match(text, /Чашки \[Неактивный\]<br>Ранее записано: 0 шт\./);
+  assert.match(text, /Кофе \[Мало\]<br>Не пересчитано/);
   assert.doesNotMatch(
     text,
     /Fresh|Previously|Inactive|Low|Last recount|Entire/,
@@ -233,7 +233,7 @@ test("workspace Russian Telegram text is consistent and preserves decimals/user 
   assert.match(previous, /5,12345678 л/);
 });
 
-test("workspace Telegram chunks stay within safe limits and retain every product", () => {
+test("an entire large recount is one native Russian RichMessage without truncation or text splitting", () => {
   const h = harness();
   const catalog = Array.from({ length: 150 }, (_, i) => ({
     ...products[0],
@@ -242,11 +242,102 @@ test("workspace Telegram chunks stay within safe limits and retain every product
     en: "Long product name ".repeat(6),
   }));
   const notification = h.seed(request(), { accepted: [] }, catalog);
-  assert.ok(notification.messages.length > 1);
-  assert.ok(notification.messages.every((text) => text.length <= 3500));
+  assert.equal(notification.format, "RICH");
+  assert.equal(notification.language, "ru");
+  assert.equal(notification.messages.length, 1);
+  assert.equal(notification.delivery.length, 1);
+  assert.ok(notification.messages[0].length > 4096);
   const combined = notification.messages.join("\n");
   for (const product of catalog)
     assert.match(combined, new RegExp(product.id + " ·"));
+  assert.equal(
+    h.context.workspaceDeliver_(request().id, "staff@example.test").status,
+    "SENT",
+  );
+  assert.equal(h.calls.length, 1);
+  assert.ok(h.calls[0].url.endsWith("/sendRichMessage"));
+  const payload = JSON.parse(h.calls[0].options.payload);
+  assert.equal(payload.rich_message.html, notification.messages[0]);
+  assert.equal(payload.rich_message.skip_entity_detection, true);
+  assert.equal(payload.text, undefined);
+});
+
+test("Russian RichMessage escapes product HTML and never interprets user names as markup", () => {
+  const h = harness();
+  const catalog = [
+    { ...products[0], ru: "Молоко & <script>alert(\"x\")</script> 'выбор'" },
+  ];
+  const notification = h.seed(request("ALL", "en"), { accepted: [] }, catalog);
+  const html = notification.messages[0];
+  assert.equal(notification.language, "ru");
+  assert.match(
+    html,
+    /Молоко &amp; &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt; &#39;выбор&#39;/,
+  );
+  assert.doesNotMatch(
+    html,
+    /<script>|Fresh recount|Previously recorded|Last recount|Entire catalog/,
+  );
+  assert.equal(
+    h.context.workspaceDeliver_(request().id, "staff@example.test").status,
+    "SENT",
+  );
+  assert.equal(JSON.parse(h.calls[0].options.payload).rich_message.html, html);
+});
+
+test("a rejected RichMessage never silently falls back to split text, a document, or public publication", () => {
+  const h = harness();
+  h.seed(request(), result, products);
+  h.setResponse(() => ({
+    getResponseCode: () => 404,
+    getContentText: () =>
+      JSON.stringify({
+        ok: false,
+        error_code: 404,
+        description: "Method unavailable",
+      }),
+  }));
+  const outcome = h.context.workspaceDeliver_(
+    request().id,
+    "staff@example.test",
+  );
+  assert.equal(outcome.status, "FAILED");
+  assert.equal(h.calls.length, 1);
+  assert.ok(h.calls[0].url.endsWith("/sendRichMessage"));
+  assert.deepEqual(
+    h.operations.get(request().id).result.accepted,
+    result.accepted,
+  );
+});
+
+test("already sent or ambiguous legacy text jobs retain their exact immutable payload and never resend", () => {
+  for (const state of ["SENT", "UNKNOWN"]) {
+    const h = harness();
+    const operation = {
+      id: request().id,
+      actor: "staff@example.test",
+      kind: "count",
+      result: {
+        state: "COMMITTED",
+        accepted: [],
+        notification: {
+          version: 1,
+          status: state,
+          scope: "ALL",
+          language: "en",
+          messages: ["Historical English <text> & bytes\nunchanged"],
+          delivery: [{ state }],
+        },
+      },
+    };
+    h.operations.set(request().id, clone(operation));
+    assert.equal(
+      h.context.workspaceDeliver_(request().id, "staff@example.test").status,
+      state,
+    );
+    assert.equal(h.calls.length, 0);
+    assert.deepEqual(h.operations.get(request().id), operation);
+  }
 });
 
 test("workspace confirmed Telegram delivery is persisted once and cannot be duplicated by retry", () => {
@@ -363,12 +454,29 @@ test("workspace Telegram cannot start before inventory is confirmed committed", 
 
 test("workspace multipart retry never resends previously acknowledged message chunks", () => {
   const h = harness();
-  const catalog = Array.from({ length: 100 }, (_, i) => ({
-    ...products[0],
-    id: "P" + i,
-    en: "Long product name ".repeat(6),
-  }));
-  const notification = h.seed(request(), { accepted: [] }, catalog);
+  // Already-persisted old text jobs must not be regenerated as a new format.
+  const notification = {
+    version: 1,
+    status: "READY",
+    scope: "ALL",
+    language: "en",
+    messages: [
+      "Old unchanged part one",
+      "Old unchanged part two",
+      "Old unchanged part three",
+    ],
+    delivery: [{ state: "READY" }, { state: "READY" }, { state: "READY" }],
+  };
+  h.operations.set(request().id, {
+    id: request().id,
+    actor: "staff@example.test",
+    kind: "count",
+    result: {
+      state: "COMMITTED",
+      accepted: [],
+      notification: clone(notification),
+    },
+  });
   let attempt = 0;
   h.setResponse(() => {
     attempt++;
@@ -393,6 +501,19 @@ test("workspace multipart retry never resends previously acknowledged message ch
   );
   assert.equal(h.calls.length, notification.messages.length + 1);
   assert.notEqual(h.calls[0].options.payload, h.calls[2].options.payload);
+  assert.ok(h.calls.every((call) => call.url.endsWith("/sendMessage")));
+  assert.equal(
+    JSON.parse(h.calls[0].options.payload).text,
+    notification.messages[0],
+  );
+  assert.deepEqual(
+    h.operations.get(request().id).result.notification.messages,
+    notification.messages,
+  );
+  assert.equal(
+    h.operations.get(request().id).result.notification.language,
+    "en",
+  );
 });
 
 test("workspace reminders install once and exclude Off, inactive, future and never-counted products", () => {
@@ -416,14 +537,22 @@ test("workspace reminders install once and exclude Off, inactive, future and nev
 });
 
 test("workspace reminder fires only once per successful recount, including same quantity recount", () => {
-  const h = harness();
+  const h = harness({ WORKSPACE_REMINDER_LANGUAGE: "en" });
   const due = { ...products[0], reminderHours: 1, stockVersion: "stock-a" };
   h.setProducts([due]);
   assert.equal(h.context.workspaceReminderTick().processed, 1);
-  assert.match(JSON.parse(h.calls[0].options.payload).text, /Recount due/);
   assert.match(
-    JSON.parse(h.calls[0].options.payload).text,
-    /Previously recorded/,
+    JSON.parse(h.calls[0].options.payload).rich_message.html,
+    /Пора пересчитать/,
+  );
+  assert.ok(h.calls[0].url.endsWith("/sendRichMessage"));
+  assert.equal(
+    h.operations.values().next().value.result.notification.language,
+    "ru",
+  );
+  assert.match(
+    JSON.parse(h.calls[0].options.payload).rich_message.html,
+    /Ранее записано/,
   );
   assert.equal(h.context.workspaceReminderTick().processed, 0);
   h.setProducts([

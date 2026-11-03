@@ -1,7 +1,8 @@
 /* Session-free workspace notifications. Telegram credentials remain private
  * Script Properties. Inventory commits never depend on Telegram availability.
- * An UNKNOWN delivery is intentionally not automatically retried: Telegram's
- * sendMessage API has no idempotency key for an ambiguous network outcome. */
+ * An UNKNOWN delivery is intentionally not automatically retried: Telegram
+ * APIs have no idempotency key for an ambiguous network outcome.
+ * New reports use one native RichMessage; old persisted text jobs stay intact. */
 function workspaceNotificationHash_(value) {
   return Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
@@ -13,43 +14,25 @@ function workspaceNotificationHash_(value) {
 }
 
 function workspaceNotificationWords_(language) {
-  return language === "ru"
-    ? {
-        title: "VARKA · Остатки",
-        all: "Весь каталог",
-        entered: "Пересчитано в этой отправке",
-        low: "Отмечено вручную: мало",
-        inactive: "Неактивный",
-        fresh: "Пересчитано сейчас",
-        previous: "Ранее записано",
-        uncounted: "Не пересчитано",
-        approximate: "Примерно",
-        lowFlag: "Мало",
-        counted: "Последний пересчёт",
-        reminder: "VARKA · Пора пересчитать",
-        reminderHelp:
-          "Подтвердите остаток новым пересчётом, даже если количество не изменилось.",
-        none: "Нет подходящих товаров.",
-        units: { l: "л", kg: "кг", pcs: "шт.", pack: "уп.", roll: "рул." },
-      }
-    : {
-        title: "VARKA · Inventory",
-        all: "Entire catalog",
-        entered: "Counted in this submission",
-        low: "Manually marked Low",
-        inactive: "Inactive",
-        fresh: "Fresh recount",
-        previous: "Previously recorded",
-        uncounted: "Not counted",
-        approximate: "Approximate",
-        lowFlag: "Low",
-        counted: "Last recount",
-        reminder: "VARKA · Recount due",
-        reminderHelp:
-          "Confirm the stock with a new recount, even if the quantity is unchanged.",
-        none: "No matching products.",
-        units: { l: "l", kg: "kg", pcs: "pcs", pack: "pack", roll: "roll" },
-      };
+  // Notification language is fixed by product requirements, not UI preference.
+  return {
+    title: "VARKA · Остатки",
+    all: "Весь каталог",
+    entered: "Пересчитано в этой отправке",
+    low: "Отмечено вручную: мало",
+    inactive: "Неактивный",
+    fresh: "Пересчитано сейчас",
+    previous: "Ранее записано",
+    uncounted: "Не пересчитано",
+    approximate: "Примерно",
+    lowFlag: "Мало",
+    counted: "Последний пересчёт",
+    reminder: "VARKA · Пора пересчитать",
+    reminderHelp:
+      "Подтвердите остаток новым пересчётом, даже если количество не изменилось.",
+    none: "Нет подходящих товаров.",
+    units: { l: "л", kg: "кг", pcs: "шт.", pack: "уп.", roll: "рул." },
+  };
 }
 
 function workspaceNotificationNumber_(value, language) {
@@ -106,25 +89,58 @@ function workspaceNotificationLines_(products, accepted, language, words) {
   });
 }
 
-function workspaceNotificationChunks_(heading, lines) {
-  const chunks = [];
-  let current = heading;
-  for (const line of lines) {
-    // Product/name bounds keep a single item comfortably below Telegram's
-    // limit. Avoid slicing a product in half or losing its freshness label.
-    if (current.length + line.length + 2 > 3500) {
-      chunks.push(current);
-      current = heading;
-    }
-    current += "\n\n" + line;
-  }
-  chunks.push(current);
-  return chunks;
+function workspaceNotificationEscape_(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function workspaceNotificationHtml_(heading, lines) {
+  const headings = String(heading).split("\n");
+  const title =
+    "<h3>" + workspaceNotificationEscape_(headings.shift()) + "</h3>";
+  const intro = headings
+    .map((line) => "<p>" + workspaceNotificationEscape_(line) + "</p>")
+    .join("");
+  return (
+    title +
+    intro +
+    "<ul>" +
+    lines
+      .map(
+        (line) =>
+          "<li>" +
+          workspaceNotificationEscape_(line).replace(/\r?\n/g, "<br>") +
+          "</li>",
+      )
+      .join("") +
+    "</ul>"
+  );
+}
+
+function workspaceNotificationEnvelope_(heading, lines, scope) {
+  const configured = Boolean(
+    prop_().getProperty("TELEGRAM_TOKEN") &&
+    prop_().getProperty("TELEGRAM_CHAT_ID"),
+  );
+  return {
+    version: 1,
+    format: "RICH",
+    status: configured ? "READY" : "NOT_CONFIGURED",
+    scope: scope,
+    language: "ru",
+    messages: [workspaceNotificationHtml_(heading, lines)],
+    delivery: [{ state: "READY" }],
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function workspaceNotification_(request, result, products, email) {
   const options = request.notification || {};
-  const language = options.language === "ru" ? "ru" : "en";
+  const language = "ru";
   const scope = options.scope || "ENTERED";
   if (!["ALL", "ENTERED", "LOW"].includes(scope))
     throw Error("INVALID_NOTIFICATION_SCOPE");
@@ -156,23 +172,11 @@ function workspaceNotification_(request, result, products, email) {
     language,
     words,
   );
-  const messages = workspaceNotificationChunks_(
+  return workspaceNotificationEnvelope_(
     words.title + "\n" + label,
     lines.length ? lines : [words.none],
+    scope,
   );
-  const configured = Boolean(
-    prop_().getProperty("TELEGRAM_TOKEN") &&
-    prop_().getProperty("TELEGRAM_CHAT_ID"),
-  );
-  return {
-    version: 1,
-    status: configured ? "READY" : "NOT_CONFIGURED",
-    scope: scope,
-    language: language,
-    messages: messages,
-    delivery: messages.map(() => ({ state: "READY" })),
-    createdAt: new Date().toISOString(),
-  };
 }
 
 function workspaceNotificationPublic_(notification) {
@@ -180,6 +184,7 @@ function workspaceNotificationPublic_(notification) {
     status: notification.status,
     scope: notification.scope,
     language: notification.language,
+    format: notification.format || "TEXT",
     delivered: notification.delivery.filter((item) => item.state === "SENT")
       .length,
     total: notification.delivery.length,
@@ -291,11 +296,6 @@ function workspaceTelegramTest_(email, request) {
       throw Error("PWA_READ_ONLY");
     const previous = workspacePrior_(id, email, "telegramTest", request);
     if (previous) return;
-    const status = workspaceTelegramStatus_(email);
-    const text =
-      request.language === "ru"
-        ? "VARKA · Проверка Telegram\n\nБот подключён: это тестовое уведомление. Остатки склада не изменены."
-        : "VARKA · Telegram test\n\nThe bot is connected: this is a test notification. Inventory quantities have not changed.";
     workspaceAppendOperation_(
       id,
       email,
@@ -304,15 +304,13 @@ function workspaceTelegramTest_(email, request) {
       {
         id: id,
         state: "COMMITTED",
-        notification: {
-          version: 1,
-          status: status.configured ? "READY" : "NOT_CONFIGURED",
-          scope: "TEST",
-          language: request.language,
-          messages: [text],
-          delivery: [{ state: "READY" }],
-          createdAt: new Date().toISOString(),
-        },
+        notification: workspaceNotificationEnvelope_(
+          "VARKA · Проверка Telegram",
+          [
+            "Бот подключён: это тестовое уведомление. Остатки склада не изменены.",
+          ],
+          "TEST",
+        ),
       },
     );
   });
@@ -354,6 +352,12 @@ function workspaceDeliver_(operationId, email, allowReminder) {
         throw Error("NOTIFICATION_NOT_AVAILABLE");
       if (notification.status === "SENT" || notification.status === "UNKNOWN")
         return { done: workspaceNotificationPublic_(notification) };
+      if (
+        notification.format === "RICH" &&
+        (notification.messages.length !== 1 ||
+          notification.delivery.length !== 1)
+      )
+        throw Error("INVALID_NOTIFICATION_FORMAT");
       if (operation.kind === "reminder") {
         const reminder = operation.result.reminder;
         if (!reminder || !reminder.productId || !reminder.countVersion)
@@ -414,6 +418,7 @@ function workspaceDeliver_(operationId, email, allowReminder) {
       return {
         index: index,
         text: notification.messages[index],
+        format: notification.format || "TEXT",
         token: token,
         chat: chat,
       };
@@ -422,11 +427,23 @@ function workspaceDeliver_(operationId, email, allowReminder) {
     let outcome;
     try {
       const response = UrlFetchApp.fetch(
-        "https://api.telegram.org/bot" + claim.token + "/sendMessage",
+        "https://api.telegram.org/bot" +
+          claim.token +
+          (claim.format === "RICH" ? "/sendRichMessage" : "/sendMessage"),
         {
           method: "post",
           contentType: "application/json",
-          payload: JSON.stringify({ chat_id: claim.chat, text: claim.text }),
+          payload: JSON.stringify(
+            claim.format === "RICH"
+              ? {
+                  chat_id: claim.chat,
+                  rich_message: {
+                    html: claim.text,
+                    skip_entity_detection: true,
+                  },
+                }
+              : { chat_id: claim.chat, text: claim.text },
+          ),
           muteHttpExceptions: true,
         },
       );
@@ -510,8 +527,7 @@ function workspaceReminderTick() {
 function workspaceReminderTick_() {
   if (prop_().getProperty("WORKSPACE_INSTALLED") !== "1") return;
   if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true") return;
-  const language =
-    prop_().getProperty("WORKSPACE_REMINDER_LANGUAGE") === "ru" ? "ru" : "en";
+  const language = "ru";
   const ids = v3Lock_(() =>
     workspaceProducts_()
       .filter(
@@ -560,19 +576,11 @@ function workspaceReminderTick_() {
           language,
           words,
         );
-        const messages = workspaceNotificationChunks_(
+        const notification = workspaceNotificationEnvelope_(
           words.reminder,
           lines.concat([words.reminderHelp]),
+          "REMINDER",
         );
-        const notification = {
-          version: 1,
-          status: "READY",
-          scope: "REMINDER",
-          language: language,
-          messages: messages,
-          delivery: messages.map(() => ({ state: "READY" })),
-          createdAt: new Date().toISOString(),
-        };
         operation = workspaceAppendOperation_(
           id,
           "system:reminders",
