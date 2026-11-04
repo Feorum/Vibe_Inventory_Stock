@@ -16,6 +16,10 @@ The phone workspace includes separate searchable Yellow Cards and an opt-in Tips
 
 Workspace v4.5 adds safe unit replacement for products with history, fractional piece counts, and the independent manual **Expiration date / Срок годности** warning. A unit replacement requires an explicitly confirmed fresh count in the new unit; old history is not relabeled or converted. The current-draft counter and historical date filters remain separate, and Telegram notifications remain single Russian native RichMessages. See the [current upgrade notes](docs/google-workspace.md#workspace-v45--unit-replacement-fractional-pieces-and-expiry-warning).
 
+### One-button releases
+
+After [one-time owner setup](docs/release-automation.md), **Actions → Deploy VARKA → Run workflow → main** tests the release, safely updates the existing Apps Script deployment, and publishes Pages with the same `/exec` URL prefilled. It preserves the original script files, manifest, properties, and existing saved connections/drafts. Google authorization is stored in GitHub environment secrets, never in the public app. Releases remain manual; no push-triggered production deployment or live Google authorization is configured by checking out this code.
+
 ## Run
 
 The remaining runtime, authentication, and workflow sections describe the separate **Node/SQLite** application. For the current Google-backed phone app, use the [workspace guide](docs/google-workspace.md).

@@ -2,6 +2,8 @@
 
 The main Google PWA now has **Stock, Catalog, Team, and Profile**. Counting is always available; no session must be started. This implementation targets the currently used Google-backed application, not the separate Node/SQLite application. It adds no hosting service or third-party proxy.
 
+For coordinated backend/frontend updates, follow [Deploy VARKA · one release button](release-automation.md). Once the owner configures Google authorization and the existing project/deployment IDs, that manual workflow performs the Apps Script version update and Pages publication together, with a stable default URL. The per-version manual upgrade instructions below remain available for initial setup and recovery; do not run installers or recreate deployments for routine automated releases.
+
 ## Workspace v4.5 · unit replacement, fractional pieces, and expiry warning
 
 **Catalog can now change the unit of a product with stock history.** Select the new unit, enter a fresh physical count for every selected location, review the minimum quantity in the new unit, and explicitly confirm the recount. Existing quantities are not prefilled or mathematically converted. The old records keep their original units, values, author, and count date; one new `CHECK` records the current balance in the new unit. Its count date advances because this is an explicitly confirmed physical recount, not a metadata-only edit. A product without stock history can change its unit without inventing an opening count. Catalog saves still do not automatically send Telegram messages.

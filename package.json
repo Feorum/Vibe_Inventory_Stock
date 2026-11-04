@@ -15,6 +15,8 @@
     "backup": "node --env-file-if-exists=.env scripts/backup.js",
     "import:varka": "node scripts/import-varka.js",
     "build:google": "node scripts/build-google-pages.js",
+    "google:authorize": "node scripts/authorize-google-release.js",
+    "deploy:apps-script": "node scripts/deploy-apps-script.js",
     "user:add": "node --env-file-if-exists=.env scripts/user-add.js"
   },
   "dependencies": {

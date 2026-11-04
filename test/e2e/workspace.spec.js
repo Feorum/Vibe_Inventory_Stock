@@ -13,6 +13,133 @@ const template = await readFile(
   "utf8",
 );
 
+test("a public release default prefills a fresh device without authenticating or storing credentials", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  const defaultEndpoint =
+    "https://script.google.com/macros/s/DEFAULT-RELEASE-TEST/exec";
+  await page.route("**/deployment-config.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `export const DEFAULT_APPS_SCRIPT_URL = ${JSON.stringify(defaultEndpoint)};`,
+    }),
+  );
+  await page.goto(appPath);
+  await expect(page.locator("#endpoint")).toHaveValue(defaultEndpoint);
+  await expect(page.locator("#password")).toHaveValue("");
+  await expect(page.locator("#workspace")).not.toBeVisible();
+  expect(backend.requests).toHaveLength(0);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("varka-workspace:configuration"),
+    ),
+  ).toBeNull();
+  expect(await page.locator("iframe").count()).toBe(0);
+});
+
+test("a saved connection and its count drafts take priority over a new release default", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  const defaultEndpoint =
+    "https://script.google.com/macros/s/DIFFERENT-DEFAULT-TEST/exec";
+  await page.route("**/deployment-config.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `export const DEFAULT_APPS_SCRIPT_URL = ${JSON.stringify(defaultEndpoint)};`,
+    }),
+  );
+  const key = `varka-workspace:${JSON.stringify([endpoint, backend.databaseId, email])}`;
+  const draft = {
+    editVersion: "9ff9ac4e-0659-4cc7-a726-146538b8441a",
+    stockVersion: backend.products[0].stockVersion,
+    countVersion: backend.products[0].countVersion,
+    catalogVersion: backend.products[0].catalogVersion,
+    unit: "l",
+    zones: ["fridge", "shelf"],
+    active: true,
+    locations: {
+      fridge: { value: "1,25", unit: "BASE" },
+      shelf: { value: "0", unit: "BASE" },
+    },
+    approx: false,
+    low: true,
+    expirationWarning: true,
+    countedAt: "2026-11-03T12:00:00.000Z",
+  };
+  await page.addInitScript(
+    ({ key, endpoint, email, draft }) => {
+      localStorage.setItem(
+        "varka-workspace:configuration",
+        JSON.stringify({ endpoint, username: email }),
+      );
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          snapshot: null,
+          drafts: { P001: draft },
+          pending: null,
+          pendingMutation: null,
+          notification: null,
+        }),
+      );
+    },
+    { key, endpoint, email, draft },
+  );
+  await page.goto(appPath);
+  await expect(page.locator("#endpoint")).toHaveValue(endpoint);
+  expect(backend.requests).toHaveLength(0);
+  await page.locator("#password").fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator("#workspace")).toBeVisible();
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "1,25",
+  );
+  await expect(card(page, "P001").locator('[data-zone="shelf"]')).toHaveValue(
+    "0",
+  );
+  const saved = await page.evaluate(
+    (key) => JSON.parse(localStorage.getItem(key)),
+    key,
+  );
+  expect(saved.drafts.P001).toEqual(draft);
+  const configuration = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("varka-workspace:configuration")),
+  );
+  expect(configuration.endpoint).toBe(endpoint);
+  const otherKey = `varka-workspace:${JSON.stringify([defaultEndpoint, backend.databaseId, email])}`;
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), otherKey),
+  ).toBeNull();
+});
+
+test("an invalid saved endpoint is not silently replaced by the release default", async ({
+  page,
+}) => {
+  await mockWorkspace(page);
+  await page.route("**/deployment-config.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `export const DEFAULT_APPS_SCRIPT_URL = ${JSON.stringify(endpoint)};`,
+    }),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "varka-workspace:configuration",
+      JSON.stringify({
+        endpoint: "old-invalid-saved-connection",
+        username: "staff@example.test",
+      }),
+    ),
+  );
+  await page.goto(appPath);
+  await expect(page.locator("#endpoint")).toHaveValue(
+    "old-invalid-saved-connection",
+  );
+  expect(await page.locator("iframe").count()).toBe(0);
+});
+
 // Only this in-memory fake database is mutated by these integration checks.
 // The real iframe transport, CSP, rendering, and browser storage are exercised.
 async function mockWorkspace(

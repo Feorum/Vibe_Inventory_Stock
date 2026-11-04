@@ -1,25 +1,63 @@
 name: Deploy Google-mode PWA
 on:
   workflow_dispatch:
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 concurrency:
   group: google-pages
   cancel-in-progress: false
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Pages deployment must run from main. Select main in Run workflow."
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: node scripts/build-google-pages.js
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:google
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Pages deployment must run from main. Select main in Run workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build Pages using the existing deployment ID when configured
+        env:
+          VARKA_APPS_SCRIPT_URL: ${{ vars.APPS_SCRIPT_DEPLOYMENT_ID && format('https://script.google.com/macros/s/{0}/exec', vars.APPS_SCRIPT_DEPLOYMENT_ID) || '' }}
+        run: node scripts/build-google-pages.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

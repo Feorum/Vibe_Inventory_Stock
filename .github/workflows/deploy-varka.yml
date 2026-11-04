@@ -1,0 +1,86 @@
+name: Deploy VARKA
+
+on:
+  workflow_dispatch:
+
+# Google credentials are available only to one step of the approved release job.
+# Configure the github-pages environment to allow deployments from main only.
+permissions: {}
+
+concurrency:
+  group: google-pages
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Deploy VARKA must run from main. Select main in Run workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm run build:google
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Deploy VARKA must run from main. Select main in Run workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Update existing Apps Script deployment
+        id: apps_script
+        env:
+          APPS_SCRIPT_ID: ${{ vars.APPS_SCRIPT_ID }}
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ vars.APPS_SCRIPT_DEPLOYMENT_ID }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          NODE_USE_ENV_PROXY: "1"
+        run: node scripts/deploy-apps-script.js
+      - name: Build Pages with the verified deployment URL
+        env:
+          VARKA_APPS_SCRIPT_URL: ${{ steps.apps_script.outputs.exec_url }}
+        run: node scripts/build-google-pages.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .cache/google-pages
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

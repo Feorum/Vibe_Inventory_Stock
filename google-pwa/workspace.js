@@ -1,4 +1,5 @@
 import { GoogleTransport, deploymentUrl } from "./transport.js";
+import { DEFAULT_APPS_SCRIPT_URL } from "./deployment-config.js";
 import { translate, errorKey } from "./locales.js";
 import {
   createDraft,
@@ -366,7 +367,9 @@ $("#refresh").dataset.i18nLabel = "refresh";
 $("#main").tabIndex = -1;
 $("#connect-form").noValidate = true;
 $("#username").value = config.username || "";
-$("#endpoint").value = config.endpoint || "";
+// A release default helps new devices; never switch a saved database connection
+// or its endpoint/account-scoped drafts automatically.
+$("#endpoint").value = config.endpoint || DEFAULT_APPS_SCRIPT_URL;
 for (const id of ["#username", "#endpoint"])
   $(id).addEventListener("input", controls);
 $("#online-login").addEventListener("click", () => {
