@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Owner-operated deployment tooling for the VARKA inventory application." />
+    <title>VARKA Release Automation</title>
+    <style>
+      :root { color-scheme: light; font: 17px/1.65 system-ui, sans-serif; color: #20372d; background: #f6f7f2; }
+      body { margin: 0; } main { max-width: 43rem; margin: auto; padding: 3rem 1.25rem; }
+      nav { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: 2.5rem; }
+      a { color: #13563c; text-underline-offset: .2em; } a:focus-visible { outline: 3px solid #13563c; outline-offset: 4px; }
+      h1, h2 { line-height: 1.2; letter-spacing: -.025em; } h1 { font-size: clamp(2rem, 7vw, 3rem); } h2 { margin-top: 2rem; font-size: 1.35rem; }
+      code { overflow-wrap: anywhere; font-size: .9em; } footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #c5cec6; font-size: .9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Release information">
+        <a href="./" aria-current="page">Overview</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms of use</a>
+      </nav>
+      <h1>VARKA Release Automation</h1>
+      <p>Deployment tooling for the owner of the VARKA inventory application. The Desktop OAuth client, <strong>VARKA Release CLI</strong>, connects an owner-run setup command and a manually approved GitHub Actions release to an existing Google Apps Script project.</p>
+      <h2>What it does</h2>
+      <p>A release verifies the selected GitHub commit, updates four managed Apps Script files, updates the existing web deployment, and publishes the phone interface on GitHub Pages. Original project files, deployment settings, Script Properties, and the existing deployment URL are preserved.</p>
+      <h2>Google authorization</h2>
+      <p>The helper requests only <code>script.projects</code> and <code>script.deployments</code> to read and update script source and deployments. These permissions can apply to scripts accessible to the authorizing account; the configured project and deployment IDs select the release target. The helper does not request direct Google Sheets, Drive, or Gmail access.</p>
+      <p>Authorization is for the project owner. Staff sign in to the inventory application using their existing VARKA access credentials. A release does not submit inventory, run database installers or scheduled triggers, or send a Telegram test.</p>
+      <p>Read the <a href="privacy.html">privacy information</a> and <a href="terms.html">terms of use</a> before authorizing the client.</p>
+      <footer>
+        <a href="https://github.com/Feorum/Vibe_Inventory_Stock/blob/main/docs/release-automation.md">Setup and release guide</a> ·
+        <a href="https://github.com/Feorum/Vibe_Inventory_Stock/issues">Project support</a> ·
+        <a href="../">Inventory application</a>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Terms of use · VARKA Release Automation</title>
+    <style>
+      :root { color-scheme: light; font: 17px/1.65 system-ui, sans-serif; color: #20372d; background: #f6f7f2; }
+      body { margin: 0; } main { max-width: 43rem; margin: auto; padding: 3rem 1.25rem; }
+      nav { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: 2.5rem; }
+      a { color: #13563c; text-underline-offset: .2em; } a:focus-visible { outline: 3px solid #13563c; outline-offset: 4px; }
+      h1, h2 { line-height: 1.2; letter-spacing: -.025em; } h1 { font-size: clamp(2rem, 7vw, 3rem); } h2 { margin-top: 2rem; font-size: 1.35rem; }
+      code { overflow-wrap: anywhere; font-size: .9em; } footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #c5cec6; font-size: .9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Release information">
+        <a href="./">Overview</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html" aria-current="page">Terms of use</a>
+      </nav>
+      <h1>Terms of use</h1>
+      <p>VARKA Release Automation and its Desktop OAuth client, VARKA Release CLI, are deployment tools for authorized operators of the VARKA project. Use them only with Google and GitHub resources you own or have permission to manage.</p>
+      <h2>Before a release</h2>
+      <p>Follow the <a href="https://github.com/Feorum/Vibe_Inventory_Stock/blob/main/docs/release-automation.md">release guide</a>. Review the selected commit, verify the configured project and existing deployment IDs, confirm the intended copied workbook, and keep the GitHub environment restricted to the approved branch. Pause manual script edits during deployment.</p>
+      <h2>Operational limits</h2>
+      <p>A release can change Apps Script project HEAD, which also affects editor runs and installable triggers. Updating Apps Script and publishing GitHub Pages are separate operations. If a step fails or times out, inspect the current deployment before retrying. A successful release is not a test of inventory counting, notification delivery, or a physical phone.</p>
+      <p>The workflow does not configure staff access, change Script Properties, migrate the workbook, run installers or scheduled triggers, or submit stock counts as a smoke test. Operators remain responsible for reviewing the target and completing acceptance checks on the intended test copy.</p>
+      <h2>Accounts and access</h2>
+      <p>Google and GitHub services remain subject to their respective terms and account policies. Keep the downloaded client JSON and release credentials private. The <a href="privacy.html">privacy page</a> explains the authorization flow, storage, and revocation options.</p>
+      <footer>Updated 4 November 2026 · <a href="./">VARKA Release Automation</a> · <a href="https://github.com/Feorum/Vibe_Inventory_Stock/issues">Project support</a></footer>
+    </main>
+  </body>
+</html>

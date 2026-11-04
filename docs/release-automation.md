@@ -47,6 +47,17 @@ Use the Google account that owns the existing Apps Script deployment.
 
 The helper requests only `script.projects` and `script.deployments`. These permissions allow changing this account's accessible script source/deployments, so treat the resulting credentials as sensitive. They do not replace the app's staff access codes or the Telegram bot token.
 
+### Public information for an external Production OAuth app
+
+Google's [OAuth branding requirements](https://support.google.com/cloud/answer/15549049) require homepage, privacy, and terms links for external Production apps. The Pages build includes three informational release pages. Publish them before authorizing the helper, then set **Google Auth Platform → Branding** to these URLs for the default Pages address:
+
+- Homepage: `https://feorum.github.io/Vibe_Inventory_Stock/release/`
+- Privacy: `https://feorum.github.io/Vibe_Inventory_Stock/release/privacy.html`
+- Terms: `https://feorum.github.io/Vibe_Inventory_Stock/release/terms.html`
+- Authorized domain: `feorum.github.io`
+
+Use the actual Pages host if different. These pages describe the owner-operated release helper; they contain no credentials or private backend source. If the backend is already compatible, the existing **Deploy Google-mode PWA** frontend-only workflow can publish them before Google release credentials exist. Otherwise publish the informational pages separately without switching staff to an incompatible frontend. Configure the audience as **Production** before authorizing for ongoing releases; if it remains in Testing, add the owner as a test user and account for Google's seven-day test-token expiry.
+
 ## 4. Authorize and upload credentials without copying tokens
 
 On your own computer, use Node.js 24 and the [GitHub CLI](https://cli.github.com/). On macOS, install `gh` through its official instructions or Homebrew if needed, then sign in:

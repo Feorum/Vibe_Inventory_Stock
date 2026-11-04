@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -81,6 +89,7 @@ test("Pages staging includes only the public allowlist and generated URL, not de
       "locales.js",
       "manifest.webmanifest",
       "model.js",
+      "release",
       "style.css",
       "sw.js",
       "transport.js",
@@ -111,6 +120,30 @@ test("Pages staging includes only the public allowlist and generated URL, not de
   );
   const icons = await readdir(path.join(destination, "icons"));
   assert.ok(icons.includes("apple-touch-icon.png"));
+  const releasePages = await readdir(path.join(destination, "release"));
+  assert.deepEqual(releasePages.sort(), [
+    "index.html",
+    "privacy.html",
+    "terms.html",
+  ]);
+  const template = await readFile(
+    new URL("../google-pwa/sw.js", import.meta.url),
+    "utf8",
+  );
+  const publicAssets = await Promise.all(
+    [
+      ...files.filter((name) => !["icons", "release"].includes(name)),
+      ...icons.map((name) => `icons/${name}`),
+      ...releasePages.map((name) => `release/${name}`),
+    ].map(async (name) => ({
+      name,
+      contents:
+        name === "sw.js"
+          ? template
+          : await readFile(path.join(destination, name)),
+    })),
+  );
+  assert.equal(serviceWorker, serviceWorkerSource(template, publicAssets));
   assert.equal(
     files.some((name) => /\.env|\.git|server|apps-script|oauth/i.test(name)),
     false,
@@ -267,4 +300,35 @@ test("unexpected staging files and icons fail closed instead of being published"
     }),
     /Unexpected staged icon/,
   );
+});
+
+test("release information staging rejects extra files, directories, and symlinks before replacing the build", async (t) => {
+  for (const unexpected of ["extra-file", "directory", "symlink"]) {
+    const destination = await temporaryStage(t);
+    await buildGooglePages({ destination, appsScriptUrl: endpoint });
+    const release = path.join(destination, "release");
+    if (unexpected === "extra-file")
+      await writeFile(
+        path.join(release, "desktop-client.json"),
+        "fake-test-fixture",
+      );
+    else {
+      await rm(path.join(release, "privacy.html"));
+      if (unexpected === "directory")
+        await mkdir(path.join(release, "privacy.html"));
+      else
+        await symlink(
+          path.join(destination, "deployment-config.js"),
+          path.join(release, "privacy.html"),
+        );
+    }
+    await assert.rejects(
+      buildGooglePages({ destination, appsScriptUrl: otherEndpoint }),
+      /Unexpected staged release page/,
+    );
+    assert.equal(
+      await readFile(path.join(destination, "deployment-config.js"), "utf8"),
+      deploymentConfigSource(endpoint),
+    );
+  }
 });

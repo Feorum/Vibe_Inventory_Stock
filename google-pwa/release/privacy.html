@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy · VARKA Release Automation</title>
+    <style>
+      :root { color-scheme: light; font: 17px/1.65 system-ui, sans-serif; color: #20372d; background: #f6f7f2; }
+      body { margin: 0; } main { max-width: 43rem; margin: auto; padding: 3rem 1.25rem; }
+      nav { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: 2.5rem; }
+      a { color: #13563c; text-underline-offset: .2em; } a:focus-visible { outline: 3px solid #13563c; outline-offset: 4px; }
+      h1, h2 { line-height: 1.2; letter-spacing: -.025em; } h1 { font-size: clamp(2rem, 7vw, 3rem); } h2 { margin-top: 2rem; font-size: 1.35rem; }
+      code { overflow-wrap: anywhere; font-size: .9em; } footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #c5cec6; font-size: .9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav aria-label="Release information">
+        <a href="./">Overview</a>
+        <a href="privacy.html" aria-current="page">Privacy</a>
+        <a href="terms.html">Terms of use</a>
+      </nav>
+      <h1>Privacy information</h1>
+      <p>VARKA Release Automation is an owner-operated deployment tool. This page describes how the release helper and workflow handle Google authorization and script data.</p>
+      <h2>Access and purpose</h2>
+      <p>The Google OAuth permissions <code>script.projects</code> and <code>script.deployments</code> are used to read the configured Apps Script project and deployed version, preserve original files, update the four managed files, and update the same deployment. The release helper does not request direct access to spreadsheets, Gmail, or Drive files. The deployed inventory application's separate permissions are unchanged.</p>
+      <h2>Credentials and storage</h2>
+      <p>The downloaded Desktop OAuth client JSON remains on the owner's computer outside the repository. Setup uses a temporary <code>127.0.0.1</code> callback with state validation and PKCE. The helper sends the OAuth client ID, client secret, and refresh token directly to the repository's <code>github-pages</code> environment secrets through GitHub CLI. It does not print or save the resulting tokens to another file.</p>
+      <p>The GitHub Actions deployment step uses those secrets to communicate with Google's OAuth and Apps Script APIs. Script source is processed in the release runner's memory. The release scripts withhold remote source, credentials, and raw Google error bodies from their logs. Credentials and private backend source are excluded from the public GitHub Pages artifact.</p>
+      <h2>Sharing and retention</h2>
+      <p>Google processes authorization and Apps Script API requests. GitHub stores the environment secrets and runs the release. The owner controls the original downloaded JSON and the configured GitHub secrets until they delete or replace them. The temporary local callback server closes when setup completes or times out. The release helper contains no advertising, sale-of-data, or analytics integration.</p>
+      <h2>Revoking access</h2>
+      <p>The owner can revoke the OAuth application's access in their <a href="https://myaccount.google.com/connections">Google Account connections</a>, remove the three Google OAuth environment secrets in GitHub, and remove the local client JSON. Revocation prevents future authorized releases; it does not undo code versions or releases already deployed.</p>
+      <p>For setup questions, use the <a href="https://github.com/Feorum/Vibe_Inventory_Stock/blob/main/docs/release-automation.md">release guide</a> or <a href="https://github.com/Feorum/Vibe_Inventory_Stock/issues">project support</a>. Do not include credentials, private script source, workbook exports, or inventory details in a public issue.</p>
+      <footer>Updated 4 November 2026 · <a href="./">VARKA Release Automation</a></footer>
+    </main>
+  </body>
+</html>

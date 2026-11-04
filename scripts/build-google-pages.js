@@ -80,15 +80,26 @@ export async function buildGooglePages({
     "maskable-512.png",
     "apple-touch-icon.png",
   ];
+  const releasePages = ["index.html", "privacy.html", "terms.html"];
   // Fail instead of publishing stale or unexpectedly added files from staging.
-  for (const entry of await readdir(destination)) {
-    if (![...files, "icons"].includes(entry))
-      throw Error(`Unexpected staged file: ${entry}`);
+  for (const entry of await readdir(destination, { withFileTypes: true })) {
+    const directory = ["icons", "release"].includes(entry.name);
+    if (
+      ![...files, "icons", "release"].includes(entry.name) ||
+      (directory ? !entry.isDirectory() : !entry.isFile())
+    )
+      throw Error(`Unexpected staged file: ${entry.name}`);
   }
   const iconDestination = path.join(destination, "icons");
   await mkdir(iconDestination, { recursive: true });
   for (const entry of await readdir(iconDestination)) {
     if (!icons.includes(entry)) throw Error(`Unexpected staged icon: ${entry}`);
+  }
+  const releaseDestination = path.join(destination, "release");
+  await mkdir(releaseDestination, { recursive: true });
+  for (const entry of await readdir(releaseDestination, { withFileTypes: true })) {
+    if (!releasePages.includes(entry.name) || !entry.isFile())
+      throw Error(`Unexpected staged release page: ${entry.name}`);
   }
   for (const name of files)
     if (name !== "deployment-config.js")
@@ -107,8 +118,17 @@ export async function buildGooglePages({
       path.join(root, "public/icons", name),
       path.join(iconDestination, name),
     );
+  for (const name of releasePages)
+    await cp(
+      path.join(root, "google-pwa", "release", name),
+      path.join(releaseDestination, name),
+    );
   const publicAssets = [];
-  for (const name of [...files, ...icons.map((name) => `icons/${name}`)])
+  for (const name of [
+    ...files,
+    ...icons.map((name) => `icons/${name}`),
+    ...releasePages.map((name) => `release/${name}`),
+  ])
     publicAssets.push({
       name,
       contents: await readFile(path.join(destination, name)),
