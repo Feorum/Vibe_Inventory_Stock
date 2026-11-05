@@ -30,13 +30,18 @@ function step(source, name) {
     .join("\n");
 }
 
-test("both production workflows are manual, main-only and serialize deployments", async () => {
+test("combined releases run on main pushes with a manual fallback; frontend-only releases remain manual", async () => {
   for (const name of ["deploy-varka.yml", "google-pages.yml"]) {
     const source = await workflow(name);
-    assert.match(source, /^on:\n  workflow_dispatch:\s*$/m);
+    if (name === "deploy-varka.yml")
+      assert.match(source, /^on:\n  push:\n    branches: \[main\]\n  workflow_dispatch:\s*$/m);
+    else {
+      assert.match(source, /^on:\n  workflow_dispatch:\s*$/m);
+      assert.doesNotMatch(source, /^\s+push:/m);
+    }
     assert.doesNotMatch(
       source,
-      /^\s+(?:push|pull_request|pull_request_target|schedule|workflow_run):/m,
+      /^\s+(?:pull_request|pull_request_target|schedule|workflow_run):/m,
     );
     assert.match(source, /^permissions: \{\}$/m);
     assert.match(
@@ -58,6 +63,20 @@ test("both production workflows are manual, main-only and serialize deployments"
       assert.match(block, /persist-credentials: false/);
       assert.doesNotMatch(block, /^    env:/m);
     }
+  }
+});
+
+test("an old run checks the current main commit before backend or frontend publication", async () => {
+  for (const [name, jobName, nextStep] of [
+    ["deploy-varka.yml", "release", "Update existing Apps Script deployment"],
+    ["google-pages.yml", "deploy", "Build Pages using the existing deployment ID when configured"],
+  ]) {
+    const block = job(await workflow(name), jobName);
+    const guard = step(block, "Require current main commit");
+    assert.match(guard, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+    assert.match(guard, /run: node scripts\/require-current-main\.js/);
+    assert.doesNotMatch(guard, /GOOGLE_OAUTH_|secrets\./);
+    assert.ok(block.indexOf("Require current main commit") < block.indexOf(nextStep));
   }
 });
 

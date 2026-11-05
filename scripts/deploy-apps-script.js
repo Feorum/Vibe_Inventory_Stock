@@ -254,7 +254,8 @@ function deploymentConfiguration(deployment, scriptId, deploymentId) {
     config?.scriptId !== scriptId ||
     !Number.isSafeInteger(config.versionNumber) ||
     config.versionNumber < 1 ||
-    config.manifestFileName !== "appsscript"
+    config.manifestFileName !== "appsscript" ||
+    (config.description !== undefined && typeof config.description !== "string")
   )
     throw failure(
       "The selected existing deployment has an unexpected project, version, or manifest. Check the configured IDs.",
@@ -280,6 +281,11 @@ function deploymentConfiguration(deployment, scriptId, deploymentId) {
       ? {}
       : { description: config.description }),
   };
+}
+function deploymentConfigFingerprint(config) {
+  // An omitted optional description and its empty string carry the same
+  // metadata. Keep the original request shape rather than changing its value.
+  return fingerprint({ ...config, description: config.description ?? "" });
 }
 function entryPointsFingerprint(deployment) {
   return fingerprint(
@@ -334,6 +340,8 @@ export async function deployAppsScript({
   log = () => {},
   writeOutput = async () => {},
   timeoutMs = 30000,
+  sleepImpl = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
 } = {}) {
   const settings = validateReleaseEnvironment(env);
   if (typeof fetchImpl !== "function")
@@ -342,6 +350,8 @@ export async function deployAppsScript({
     throw failure(
       "The release request timeout must be between 1 and 60000 milliseconds.",
     );
+  if (typeof sleepImpl !== "function")
+    throw failure("A supported release verification delay is required.");
   const local = managedFiles || (await loadManagedFiles());
   // Validate local inputs before refreshing any credentials.
   for (const entry of MANAGED_SCRIPT_FILES)
@@ -448,7 +458,8 @@ export async function deployAppsScript({
       settings.APPS_SCRIPT_DEPLOYMENT_ID,
     );
     if (
-      fingerprint(candidateConfig) !== fingerprint(initialConfig) ||
+      deploymentConfigFingerprint(candidateConfig) !==
+        deploymentConfigFingerprint(initialConfig) ||
       entryPointsFingerprint(candidate) !== entryPointsFingerprint(existing)
     )
       throw failure(
@@ -525,21 +536,55 @@ export async function deployAppsScript({
     );
     changed = true;
   }
-  const verified = await getDeployment();
-  const verifiedConfig = validateDeploymentConfig(
-    verified,
-    merged,
-    settings.APPS_SCRIPT_ID,
-    settings.APPS_SCRIPT_DEPLOYMENT_ID,
-  );
-  if (
-    fingerprint(verifiedConfig) !==
-      fingerprint({ ...initialConfig, versionNumber }) ||
-    entryPointsFingerprint(verified) !== entryPointsFingerprint(existing)
-  )
-    throw failure(
-      "Deployment verification failed: version, URL, or access settings differ. Pages must not be published; inspect the existing deployment without automatic rollback.",
+  const expectedConfig = { ...initialConfig, versionNumber };
+  const verificationDelays = [2000, 4000, 8000];
+  for (let read = 0; ; read++) {
+    const verified = await getDeployment();
+    const verifiedConfig = validateDeploymentConfig(
+      verified,
+      merged,
+      settings.APPS_SCRIPT_ID,
+      settings.APPS_SCRIPT_DEPLOYMENT_ID,
     );
+    const configMatches =
+      deploymentConfigFingerprint(verifiedConfig) ===
+      deploymentConfigFingerprint(expectedConfig);
+    const entryPointsMatch =
+      entryPointsFingerprint(verified) === entryPointsFingerprint(existing);
+    if (configMatches && entryPointsMatch) {
+      if (
+        read > 0 &&
+        filesFingerprint((await getContent()).files) !== expectedHash
+      )
+        throw failure(
+          "Apps Script HEAD changed during deployment verification. Pages must not be published; inspect the concurrent edit without automatic rollback.",
+        );
+      break;
+    }
+    // A successful update can be followed by an old read. Only that exact
+    // pre-update snapshot permits bounded GET rechecks; no write is retried.
+    const originalSnapshot =
+      deploymentConfigFingerprint(verifiedConfig) ===
+        deploymentConfigFingerprint(initialConfig) && entryPointsMatch;
+    if (changed && originalSnapshot && read < verificationDelays.length) {
+      if (filesFingerprint((await getContent()).files) !== expectedHash)
+        throw failure(
+          "Apps Script HEAD changed during deployment verification. Pages must not be published; inspect the concurrent edit without automatic rollback.",
+        );
+      log(
+        "The deployment read still matches the pre-update snapshot; waiting before a bounded read-only verification recheck.",
+      );
+      await sleepImpl(verificationDelays[read]);
+      continue;
+    }
+    const descriptionMatches =
+      (verifiedConfig.description ?? "") === (initialConfig.description ?? "");
+    throw failure(
+      `Deployment verification failed: expected version ${versionNumber}, received ${verifiedConfig.versionNumber}; ` +
+        `description ${descriptionMatches ? "matches" : "differs"}; entry points ${entryPointsMatch ? "match" : "differ"}. ` +
+        "Pages must not be published; inspect the existing deployment without automatic rollback.",
+    );
+  }
   const result = {
     execUrl: `https://script.google.com/macros/s/${settings.APPS_SCRIPT_DEPLOYMENT_ID}/exec`,
     scriptVersion: versionNumber,

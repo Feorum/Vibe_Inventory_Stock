@@ -16,9 +16,9 @@ The phone workspace includes separate searchable Yellow Cards and an opt-in Tips
 
 Workspace v4.5 adds safe unit replacement for products with history, fractional piece counts, and the independent manual **Expiration date / Срок годности** warning. A unit replacement requires an explicitly confirmed fresh count in the new unit; old history is not relabeled or converted. The current-draft counter and historical date filters remain separate, and Telegram notifications remain single Russian native RichMessages. See the [current upgrade notes](docs/google-workspace.md#workspace-v45--unit-replacement-fractional-pieces-and-expiry-warning).
 
-### One-button releases
+### Automatic releases
 
-After [one-time owner setup](docs/release-automation.md), **Actions → Deploy VARKA → Run workflow → main** tests the release, safely updates the existing Apps Script deployment, and publishes Pages with the same `/exec` URL prefilled. It preserves the original script files, manifest, properties, and existing saved connections/drafts. Google authorization is stored in GitHub environment secrets, never in the public app. Releases remain manual; no push-triggered production deployment or live Google authorization is configured by checking out this code.
+After [one-time owner setup](docs/release-automation.md), every push or merge to **main** starts **Deploy VARKA**. Passing Node/browser checks automatically releases the existing Apps Script deployment and publishes Pages, without a separate environment-review prompt. The workflow supplies the verified, stable `/exec` URL; normal staff sign-in needs only email and access code. Connection settings remain available for custom connections and recovery. Original script files, manifest, properties, and existing saved connections/drafts are preserved. Google authorization stays in GitHub environment secrets. **Actions → Deploy VARKA → Run workflow → main** remains available for recovery; checking out the code alone does not configure the required IDs, credentials, or GitHub environment.
 
 ## Run
 

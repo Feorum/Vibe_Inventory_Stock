@@ -54,6 +54,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Require current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-current-main.js
       - name: Build Pages using the existing deployment ID when configured
         env:
           VARKA_APPS_SCRIPT_URL: ${{ vars.APPS_SCRIPT_DEPLOYMENT_ID && format('https://script.google.com/macros/s/{0}/exec', vars.APPS_SCRIPT_DEPLOYMENT_ID) || '' }}

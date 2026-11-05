@@ -13,7 +13,7 @@ const template = await readFile(
   "utf8",
 );
 
-test("a public release default prefills a fresh device without authenticating or storing credentials", async ({
+test("a public release default lets a fresh device sign in with only account credentials", async ({
   page,
 }) => {
   const backend = await mockWorkspace(page);
@@ -27,6 +27,9 @@ test("a public release default prefills a fresh device without authenticating or
   );
   await page.goto(appPath);
   await expect(page.locator("#endpoint")).toHaveValue(defaultEndpoint);
+  await expect(page.locator("#endpoint")).not.toBeVisible();
+  await expect(page.locator("#connection-settings")).not.toHaveAttribute("open");
+  await expect(page.locator("#saved-connection-notice")).not.toBeVisible();
   await expect(page.locator("#password")).toHaveValue("");
   await expect(page.locator("#workspace")).not.toBeVisible();
   expect(backend.requests).toHaveLength(0);
@@ -36,6 +39,39 @@ test("a public release default prefills a fresh device without authenticating or
     ),
   ).toBeNull();
   expect(await page.locator("iframe").count()).toBe(0);
+  await page.locator("#login-language").selectOption("ru");
+  await expect(page.locator("#connection-settings > summary")).toHaveText(
+    "Настройки подключения",
+  );
+  await page.locator("#login-language").selectOption("en");
+  await page.locator("#username").fill(email);
+  await page.locator("#password").fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator("#workspace")).toBeVisible();
+  const configuration = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("varka-workspace:configuration")),
+  );
+  expect(configuration).toEqual({ endpoint: defaultEndpoint, username: email });
+  expect(
+    await page.evaluate(() => JSON.stringify({ ...localStorage })),
+  ).not.toContain(password);
+  await expect(page.locator("#password")).toHaveValue("");
+});
+
+test("a device without a release default keeps manual connection settings available", async ({
+  page,
+}) => {
+  await mockWorkspace(page);
+  await page.route("**/deployment-config.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: 'export const DEFAULT_APPS_SCRIPT_URL = "";',
+    }),
+  );
+  await page.goto(appPath);
+  await expect(page.locator("#connection-settings")).toHaveAttribute("open");
+  await expect(page.locator("#endpoint")).toBeVisible();
+  await login(page);
 });
 
 test("a saved connection and its count drafts take priority over a new release default", async ({
@@ -89,6 +125,8 @@ test("a saved connection and its count drafts take priority over a new release d
   );
   await page.goto(appPath);
   await expect(page.locator("#endpoint")).toHaveValue(endpoint);
+  await expect(page.locator("#endpoint")).not.toBeVisible();
+  await expect(page.locator("#saved-connection-notice")).toBeVisible();
   expect(backend.requests).toHaveLength(0);
   await page.locator("#password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -137,7 +175,14 @@ test("an invalid saved endpoint is not silently replaced by the release default"
   await expect(page.locator("#endpoint")).toHaveValue(
     "old-invalid-saved-connection",
   );
+  await expect(page.locator("#connection-settings")).toHaveAttribute("open");
+  await expect(page.locator("#endpoint")).toBeVisible();
+  await page.locator("#password").fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   expect(await page.locator("iframe").count()).toBe(0);
+  await expect(page.locator("#workspace")).not.toBeVisible();
+  await expect(page.locator("#connection-settings")).toHaveAttribute("open");
+  await expect(page.locator("#message")).toHaveAttribute("role", "alert");
 });
 
 // Only this in-memory fake database is mutated by these integration checks.
@@ -628,7 +673,11 @@ async function mockWorkspace(
 }
 
 async function login(page, username = email) {
-  await page.locator("#endpoint").fill(endpoint);
+  if ((await page.locator("#endpoint").inputValue()) !== endpoint) {
+    if (!(await page.locator("#endpoint").isVisible()))
+      await page.locator("#connection-settings > summary").click();
+    await page.locator("#endpoint").fill(endpoint);
+  }
   await page.locator("#username").fill(username);
   await page.locator("#password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();

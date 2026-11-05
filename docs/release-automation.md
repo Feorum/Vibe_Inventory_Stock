@@ -1,14 +1,14 @@
-# Deploy VARKA · one release button
+# Deploy VARKA · automatic releases
 
-After the one-time owner setup, use **GitHub → Actions → Deploy VARKA → Run workflow → main**. It tests the exact commit, updates the existing Apps Script deployment, then publishes GitHub Pages with that deployment's URL prefilled. It does not create another script project or deployment.
+After the one-time owner setup, push or merge reviewed changes to **main**. **Deploy VARKA** starts automatically, tests the exact commit, updates the existing Apps Script deployment, and publishes GitHub Pages with the verified deployment URL. There is no separate `github-pages` approval prompt. **GitHub → Actions → Deploy VARKA → Run workflow → main** remains a manual recovery option. The workflow does not create another script project or deployment.
 
-The workflow is **manual**, not triggered by pushes or pull requests. Automatic release on every push can be considered after a successful test-copy deployment. No live Google authorization or deployment has been performed by the repository tests.
+Pull-request branches, tags, and schedules do not release. Both production workflows share a deployment concurrency group, and each release checks that its tested commit is still the current **main** before changing the backend or publishing a frontend-only build. A superseded or older manually rerun commit stops rather than rolling the site back. Repository tests use mocked Google APIs; owner authorization and the live deployment remain external setup.
 
 ## What it preserves
 
 - The complete existing Apps Script project is downloaded privately. Only `PwaBridge.gs`, `PwaBridge.html`, `Workspace.gs`, and `WorkspaceNotifications.gs` are replaced from GitHub. Original inventory/authentication files, other files, and the complete manifest are preserved.
 - The existing deployment ID, `/exec` URL, access setting, and execute-as setting stay the same. Script Properties, staff credentials, workbook ID, bot credentials, triggers, and data are not configured or migrated by this workflow.
-- Existing devices keep their saved connection and its account/database-scoped drafts. A generated URL is a default for unconfigured devices, not permission to switch an existing connection.
+- Existing devices keep their saved connection and its account/database-scoped drafts. The release supplies the URL for unconfigured devices. With a valid configured or saved connection, normal sign-in shows email and access code; the URL stays inside **Connection settings**. Missing or invalid connections open those settings automatically. An existing different saved connection remains selected and is identified as such; a new default is not permission to move its drafts to another database.
 - No inventory submission, installer, scheduled-trigger execution, or Telegram test is run as a deployment smoke test.
 - Google credentials are used only by the backend deployment step. They are not available to dependency installation/tests and are never put into the public Pages artifact.
 
@@ -31,10 +31,10 @@ In `Feorum/Vibe_Inventory_Stock`:
 
 1. **Settings → Pages → Build and deployment → Source → GitHub Actions**.
 2. **Settings → Secrets and variables → Actions → Variables**: add the two values above as repository variables.
-3. **Settings → Environments → github-pages**: create it if it does not already exist. Under deployment branches/tags, allow **only `main`**. Add a required reviewer if your plan supports it. Protect `main` with review requirements appropriate for production.
+3. **Settings → Environments → github-pages**: create it if it does not already exist. Under deployment branches/tags, allow **only the `main` branch**, with no tag rules. For unattended releases, leave **Required reviewers** empty and the wait timer at zero. The test job is the deployment gate; keep `main` protected with appropriate source-review requirements. Environment secrets remain restricted to the permitted branch.
 4. Google secrets will be stored in this **environment**, not in the repository or frontend. Run the release only after all setup steps have completed.
 
-The workflows reject non-main refs and share one concurrency group. These code checks are useful, but GitHub's environment branch restriction is also necessary: a modified workflow on another branch must not gain access to production secrets.
+The workflows reject non-main refs and share one concurrency group. GitHub's environment branch restriction is also necessary: a modified workflow on another branch must not gain access to production secrets. No approval bot or extra approval credential is installed.
 
 ## 3. Enable Google access once
 
@@ -111,11 +111,17 @@ The original `doGet` hook to `pwaPage_`, original authentication/ledger function
 ## 6. Make a release
 
 1. Push reviewed changes to `main`.
-2. Open **Actions → Deploy VARKA → Run workflow**, select **main**, and run it.
-3. Wait for Node/browser tests. Approve the `github-pages` environment if a reviewer is configured.
+2. **Deploy VARKA** starts automatically. Watch it in GitHub **Actions**; no workflow button or environment review is required. A manual run on **main** remains available after an inspected failure.
+3. Wait for Node/browser tests. A failed check blocks deployment. Before releasing, the job verifies that the tested SHA is still the current `main` commit.
 4. The release reads/rechecks the complete project, overlays the four managed files, uploads HEAD if needed, creates an immutable version if needed, updates the **same** deployment, and verifies its version/URL/access before building Pages.
 5. Pages receives a generated public `deployment-config.js`. The service-worker cache revision is derived from all public assets, so a code or default-URL change causes an update without manually editing a cache number.
-6. Reopen the PWA online, reload after the update, refresh the database, and verify login/counting against the test copy. New devices have the URL prefilled; users still sign in normally. Existing devices are not silently rerouted and no drafts are cleared.
+6. Reopen the PWA online, reload after the update, refresh the database, and verify login/counting against the test copy. Normal sign-in only needs email and the individual VARKA access code. **Connection settings** is available for custom connections or recovery. Existing devices are not silently rerouted and no drafts are cleared.
+
+### The `/exec` link is release configuration
+
+Routine updates keep the same Apps Script deployment ID and `/exec` URL. The backend deployment step verifies that URL and passes it to the Pages build; staff do not copy or paste a fresh link for each release. Google API credentials remain in the release job. GitHub Pages is static hosting, so the browser still uses the published public endpoint to reach Apps Script, without requiring another server or proxy.
+
+If the owner deliberately replaces the Apps Script project/deployment, update the two GitHub ID variables once and make a release from the current `main`. Fresh devices receive the verified endpoint automatically. An existing different custom connection is preserved with its drafts and needs an explicit connection change; it is not silently switched to another workbook.
 
 The deployment URL is intentionally public configuration, not an authentication secret. Passwords, OAuth credentials, Script Properties, backend source, and workbook exports are not staged for Pages.
 
@@ -128,13 +134,14 @@ The older **Deploy Google-mode PWA** workflow remains an advanced **frontend-onl
 - Updating project **HEAD affects editor runs and installable triggers immediately**, even before a new web version is deployed. Plan releases carefully around active work and scheduled automations. This workflow does not automatically disable triggers.
 - Source upload, version creation, deployment update, and Pages publication are **not one cross-service transaction**. If Pages fails after Apps Script succeeds, the backend can already be updated. If a write times out, it may have completed. Inspect current HEAD/deployment before rerunning; the script does not blindly retry writes or roll back over newer work.
 - A failed backend step blocks Pages in the combined workflow. If the identical backend is already deployed on the next run, it is verified without creating another version.
+- After a successful deployment update, an immediate read that returns the **exact pre-update deployment snapshot** is rechecked after 2, 4, and 8 seconds. These are bounded read-only checks, not retries of a source upload, version creation, or deployment write. Unexpected versions, URL/access/execute-as/metadata changes, and concurrent source edits stop immediately. An old state that persists also blocks Pages; final errors report mismatch categories without private descriptions or source.
 - Remote source and raw Google error bodies are withheld from logs to avoid exposing private code or credentials. HTTP 400 can mean source/manifest problems or a version limit; HTTP 401/403 can mean authorization, API enablement, ownership, or organization policy. Inspect the project/Google settings privately. Reauthorize through the helper when necessary.
 - API-level version/URL verification is **not** a live business-workflow test. After first setup, verify actual Google authorization/embedding, your copied workbook, triggers, mobile offline recovery, and a dedicated Telegram test chat. New script scopes/services may require manual owner authorization even after this release credential setup.
 
 No setup command or workflow automatically runs database installers, migrations, inventory writes, or Telegram notification tests.
 
-## Verification completed in this checkout
+## Verification
 
-**220/220 Node tests** and **207/207 browser regressions** passed. Three opt-in screenshot cases are intentionally skipped in the regular browser run. New checks include 18 mocked deployment API cases, 14 OAuth-helper cases, seven isolated Pages/config/cache tests, workflow-policy checks, and browser cases for fresh-device defaults, saved connections/drafts taking priority, and invalid saved endpoints not being silently switched. Public staging, JavaScript syntax, YAML formatting/parsing, and `git diff --check` passed.
+Each release runs the Node suite, browser regressions, and public Pages staging checks before the credential-bearing deployment job. The tests cover automatic/manual workflow policy, rejection of stale main commits, limited post-write read convergence, credential isolation, release-provided connection defaults, custom saved connections/drafts, and invalid endpoint recovery. Three opt-in screenshot cases remain outside the regular browser run.
 
-Google/GitHub API interactions in these checks are mocked; OAuth callback tests bind only an ephemeral local loopback port. No real Google consent, GitHub secret upload, Apps Script deployment, Pages publication, inventory write, or Telegram delivery was performed. The first live end-to-end release remains blocked on the owner's one-time setup above. Real-device acceptance remains separate from Chromium phone-size emulation.
+Google/GitHub API interactions in repository tests are mocked; OAuth callback tests bind only an ephemeral local loopback port. The owner setup and a successful live combined release were completed on 5 November 2026 using the selected copied-workbook deployment. Repository checks do not submit live inventory or send Telegram messages. Physical-phone and business-workflow acceptance remain separate from Chromium phone-size emulation and API deployment verification.

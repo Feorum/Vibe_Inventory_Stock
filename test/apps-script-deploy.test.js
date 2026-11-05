@@ -437,12 +437,189 @@ test("successful release keeps original files, manifest, deployment ID, access, 
 test("an already deployed identical release creates neither a version nor a deployment", async () => {
   const current = mergeScriptFiles(files(), local);
   const mock = google({ head: current, deployed: current });
-  const attempt = run(mock);
+  const delays = [];
+  const attempt = run(mock, {
+    sleepImpl: async (milliseconds) => delays.push(milliseconds),
+  });
   const result = await attempt.promise;
   assert.equal(result.changed, false);
   assert.equal(result.scriptVersion, 3);
   assert.deepEqual(writes(mock.state), []);
+  assert.deepEqual(delays, []);
   assert.match(attempt.outputs[0], /script_version=3/);
+});
+
+test("one stale post-update deployment read converges without repeating any write", async () => {
+  const original = deployment();
+  let updated = false;
+  let stale = true;
+  const delays = [];
+  const mock = google({
+    afterDeploymentUpdate() {
+      updated = true;
+    },
+    intercept(call) {
+      if (
+        updated &&
+        stale &&
+        call.method === "GET" &&
+        call.url.includes("/deployments/")
+      ) {
+        stale = false;
+        return response(original);
+      }
+    },
+  });
+  const attempt = run(mock, {
+    sleepImpl: async (milliseconds) => delays.push(milliseconds),
+  });
+  const result = await attempt.promise;
+  assert.equal(result.scriptVersion, 4);
+  assert.deepEqual(delays, [2000]);
+  assert.equal(writes(mock.state).length, 3);
+  assert.equal(deploymentWrites(mock.state).length, 1);
+  assert.equal(versionWrites(mock.state).length, 1);
+  assert.equal(attempt.outputs.length, 1);
+  assertPrivate([attempt.logs, attempt.outputs]);
+});
+
+test("persistent pre-update readback stops after bounded GET rechecks without publishing or repeating writes", async () => {
+  const original = deployment();
+  original.deploymentConfig.description = privateSource;
+  let updated = false;
+  const delays = [];
+  const mock = google({
+    deployment: original,
+    afterDeploymentUpdate() {
+      updated = true;
+    },
+    intercept(call) {
+      if (
+        updated &&
+        call.method === "GET" &&
+        call.url.includes("/deployments/")
+      )
+        return response(original);
+    },
+  });
+  const attempt = run(mock, {
+    sleepImpl: async (milliseconds) => delays.push(milliseconds),
+  });
+  const error = await attempt.promise.catch((error) => error);
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /expected version 4, received 3/);
+  assert.match(error.message, /description matches; entry points match/);
+  assert.deepEqual(delays, [2000, 4000, 8000]);
+  assert.equal(writes(mock.state).length, 3);
+  assert.equal(deploymentWrites(mock.state).length, 1);
+  assert.deepEqual(attempt.outputs, []);
+  assertPrivate([error.message, error.stack, attempt.logs, attempt.outputs]);
+});
+
+test("a different deployment appearing during readback fails immediately instead of waiting over it", async () => {
+  const original = deployment();
+  let updated = false;
+  let readbacks = 0;
+  const delays = [];
+  const mock = google({
+    afterDeploymentUpdate() {
+      updated = true;
+    },
+    intercept(call, state) {
+      if (
+        updated &&
+        call.method === "GET" &&
+        call.url.includes("/deployments/")
+      ) {
+        if (++readbacks === 1) return response(original);
+        state.deployment.deploymentConfig.versionNumber = 8;
+      }
+    },
+  });
+  const attempt = run(mock, {
+    sleepImpl: async (milliseconds) => delays.push(milliseconds),
+  });
+  await assert.rejects(attempt.promise, /expected version 4, received 8/);
+  assert.deepEqual(delays, [2000]);
+  assert.equal(deploymentWrites(mock.state).length, 1);
+  assert.equal(mock.state.deployment.deploymentConfig.versionNumber, 8);
+  assert.deepEqual(attempt.outputs, []);
+});
+
+test("a source edit during the readback wait blocks Pages without rolling back the deployment", async () => {
+  const original = deployment();
+  let updated = false;
+  let stale = true;
+  const mock = google({
+    afterDeploymentUpdate() {
+      updated = true;
+    },
+    intercept(call) {
+      if (
+        updated &&
+        stale &&
+        call.method === "GET" &&
+        call.url.includes("/deployments/")
+      ) {
+        stale = false;
+        return response(original);
+      }
+    },
+  });
+  const attempt = run(mock, {
+    sleepImpl: async () => {
+      mock.state.head[0].source += "\n// concurrent source edit";
+    },
+  });
+  await assert.rejects(
+    attempt.promise,
+    /HEAD changed during deployment verification/,
+  );
+  assert.equal(deploymentWrites(mock.state).length, 1);
+  assert.equal(mock.state.deployment.deploymentConfig.versionNumber, 4);
+  assert.match(mock.state.head[0].source, /concurrent source edit/);
+  assert.deepEqual(attempt.outputs, []);
+});
+
+test("empty and omitted optional deployment descriptions are equivalent without changing the request shape", async () => {
+  for (const initialDescription of [undefined, ""]) {
+    const original = deployment();
+    if (initialDescription === undefined)
+      delete original.deploymentConfig.description;
+    else original.deploymentConfig.description = initialDescription;
+    const mock = google({
+      deployment: original,
+      afterDeploymentUpdate(state) {
+        if (initialDescription === undefined)
+          state.deployment.deploymentConfig.description = "";
+        else delete state.deployment.deploymentConfig.description;
+      },
+    });
+    const result = await run(mock).promise;
+    assert.equal(result.scriptVersion, 4);
+    assert.equal(deploymentWrites(mock.state).length, 1);
+    assert.equal(
+      Object.hasOwn(
+        JSON.parse(deploymentWrites(mock.state)[0].body).deploymentConfig,
+        "description",
+      ),
+      initialDescription !== undefined,
+    );
+  }
+  for (const description of [null, 42, { value: privateSource }]) {
+    const invalid = deployment();
+    invalid.deploymentConfig.description = description;
+    assert.throws(
+      () =>
+        validateDeploymentConfig(
+          invalid,
+          files(),
+          env.APPS_SCRIPT_ID,
+          env.APPS_SCRIPT_DEPLOYMENT_ID,
+        ),
+      /unexpected project, version, or manifest/,
+    );
+  }
 });
 
 test("undeployed original source changes are not automatically published by a managed-file release", async () => {
@@ -565,12 +742,28 @@ test("post-deployment URL/access/version verification fails closed before Pages 
     (state) => {
       state.deployment.deploymentConfig.versionNumber = 8;
     },
+    (state) => {
+      state.deployment.entryPoints[0].webApp.entryPointConfig.executeAs =
+        "USER_ACCESSING";
+    },
+    (state) => {
+      state.deployment.deploymentConfig.description = privateSource;
+    },
+    (state) => {
+      state.deployment.entryPoints[0].webApp.unexpectedMetadata = privateSource;
+    },
   ]) {
     const mock = google({ afterDeploymentUpdate: mutate });
-    const attempt = run(mock);
-    await assert.rejects(attempt.promise);
+    const delays = [];
+    const attempt = run(mock, {
+      sleepImpl: async (milliseconds) => delays.push(milliseconds),
+    });
+    const error = await attempt.promise.catch((error) => error);
+    assert.ok(error instanceof Error);
+    assert.deepEqual(delays, []);
     assert.equal(deploymentWrites(mock.state).length, 1);
     assert.deepEqual(attempt.outputs, []);
+    assertPrivate([error.message, error.stack, attempt.logs, attempt.outputs]);
   }
 });
 

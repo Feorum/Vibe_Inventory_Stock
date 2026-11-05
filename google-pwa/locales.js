@@ -10,6 +10,8 @@ export const en = {
   username: "Username",
   password: "Password",
   endpoint: "Apps Script deployment URL",
+  connectionSettings: "Connection settings",
+  usingSavedConnection: "Using this device’s saved connection.",
   language: "Language",
   loginHelp:
     "Use your account email and individual VARKA access code, not your Google password.",
@@ -222,6 +224,8 @@ export const ru = {
   username: "Имя пользователя",
   password: "Пароль",
   endpoint: "URL развёртывания Apps Script",
+  connectionSettings: "Настройки подключения",
+  usingSavedConnection: "Используется сохранённое подключение этого устройства.",
   language: "Язык",
   loginHelp:
     "Используйте почту аккаунта и личный код доступа VARKA, а не пароль Google.",

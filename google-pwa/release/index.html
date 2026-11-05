@@ -22,9 +22,9 @@
         <a href="terms.html">Terms of use</a>
       </nav>
       <h1>VARKA Release Automation</h1>
-      <p>Deployment tooling for the owner of the VARKA inventory application. The Desktop OAuth client, <strong>VARKA Release CLI</strong>, connects an owner-run setup command and a manually approved GitHub Actions release to an existing Google Apps Script project.</p>
+      <p>Deployment tooling for the owner of the VARKA inventory application. The Desktop OAuth client, <strong>VARKA Release CLI</strong>, connects an owner-run setup command and a GitHub Actions release to an existing Google Apps Script project. Changes pushed or merged to the protected main branch release automatically after the Node and browser checks pass.</p>
       <h2>What it does</h2>
-      <p>A release verifies the selected GitHub commit, updates four managed Apps Script files, updates the existing web deployment, and publishes the phone interface on GitHub Pages. Original project files, deployment settings, Script Properties, and the existing deployment URL are preserved.</p>
+      <p>A release verifies the selected GitHub commit and current main branch, updates four managed Apps Script files, updates the existing web deployment, and publishes the phone interface on GitHub Pages. Original project files, deployment settings, Script Properties, and the existing deployment URL are preserved. The release supplies that URL to the app; normal staff sign-in needs only email and an individual access code.</p>
       <h2>Google authorization</h2>
       <p>The helper requests only <code>script.projects</code> and <code>script.deployments</code> to read and update script source and deployments. These permissions can apply to scripts accessible to the authorizing account; the configured project and deployment IDs select the release target. The helper does not request direct Google Sheets, Drive, or Gmail access.</p>
       <p>Authorization is for the project owner. Staff sign in to the inventory application using their existing VARKA access credentials. A release does not submit inventory, run database installers or scheduled triggers, or send a Telegram test.</p>

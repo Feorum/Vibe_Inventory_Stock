@@ -343,7 +343,7 @@ function setLanguage(value) {
     flash(lastMessage.key, lastMessage.values, lastMessage.error);
 }
 
-document.body.innerHTML = `<a class="skip" href="#main" data-i18n="skip"></a><header><strong class="brand">VARKA</strong><span id="connection-badge"></span><button id="online-login" type="button" data-i18n="signInAgain" hidden></button><button id="refresh" type="button" data-i18n="refresh" hidden></button></header><main id="main"><p id="message" role="status" aria-live="polite" tabindex="-1"></p><section id="connect-panel" class="panel"><h1 data-i18n="loginTitle"></h1><p class="help" data-i18n="loginHelp"></p><form id="connect-form" class="form-grid"><label><span data-i18n="username"></span><input id="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label><label><span data-i18n="password"></span><input id="password" type="password" required autocomplete="current-password" maxlength="200"></label><label><span data-i18n="endpoint"></span><input id="endpoint" type="url" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label><div id="login-language-wrap"></div><button id="sign-in" class="primary" data-i18n="signIn"></button></form><p class="help" data-i18n="privacy"></p><button id="restore-offline" type="button" data-i18n="restoreOffline" hidden></button><p id="cache-identity" class="help" hidden></p></section><section id="workspace" hidden><h1 id="view-heading" tabindex="-1"></h1><div id="pending-panel" class="panel" hidden><h2 data-i18n="pending"></h2><p data-i18n="pendingHelp"></p><button id="retry" type="button" data-i18n="retry"></button></div><div id="notification-panel" class="panel" hidden></div><div id="page-content"></div><div id="undo-panel" hidden></div></section></main><div id="count-bar" class="count-bar" hidden><div><span class="help" data-i18n="draftNotice"></span><button id="synchronize-quantity" type="button" class="primary" data-i18n="syncQuantity"></button></div></div><nav id="navigation" aria-label="VARKA" hidden></nav><footer data-i18n="version"></footer><dialog id="workspace-dialog"><form id="dialog-form" class="form-grid" novalidate></form></dialog>`;
+document.body.innerHTML = `<a class="skip" href="#main" data-i18n="skip"></a><header><strong class="brand">VARKA</strong><span id="connection-badge"></span><button id="online-login" type="button" data-i18n="signInAgain" hidden></button><button id="refresh" type="button" data-i18n="refresh" hidden></button></header><main id="main"><p id="message" role="status" aria-live="polite" tabindex="-1"></p><section id="connect-panel" class="panel"><h1 data-i18n="loginTitle"></h1><p class="help" data-i18n="loginHelp"></p><form id="connect-form" class="form-grid"><label><span data-i18n="username"></span><input id="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label><label><span data-i18n="password"></span><input id="password" type="password" required autocomplete="current-password" maxlength="200"></label><p id="saved-connection-notice" class="help" data-i18n="usingSavedConnection" hidden></p><details id="connection-settings"><summary data-i18n="connectionSettings"></summary><label><span data-i18n="endpoint"></span><input id="endpoint" type="url" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label></details><div id="login-language-wrap"></div><button id="sign-in" class="primary" data-i18n="signIn"></button></form><p class="help" data-i18n="privacy"></p><button id="restore-offline" type="button" data-i18n="restoreOffline" hidden></button><p id="cache-identity" class="help" hidden></p></section><section id="workspace" hidden><h1 id="view-heading" tabindex="-1"></h1><div id="pending-panel" class="panel" hidden><h2 data-i18n="pending"></h2><p data-i18n="pendingHelp"></p><button id="retry" type="button" data-i18n="retry"></button></div><div id="notification-panel" class="panel" hidden></div><div id="page-content"></div><div id="undo-panel" hidden></div></section></main><div id="count-bar" class="count-bar" hidden><div><span class="help" data-i18n="draftNotice"></span><button id="synchronize-quantity" type="button" class="primary" data-i18n="syncQuantity"></button></div></div><nav id="navigation" aria-label="VARKA" hidden></nav><footer data-i18n="version"></footer><dialog id="workspace-dialog"><form id="dialog-form" class="form-grid" novalidate></form></dialog>`;
 $("#login-language-wrap").append(languageSelect("login-language"));
 $("#count-bar").classList.add("compact-count-bar");
 $("#count-bar").setAttribute("role", "region");
@@ -370,6 +370,11 @@ $("#username").value = config.username || "";
 // A release default helps new devices; never switch a saved database connection
 // or its endpoint/account-scoped drafts automatically.
 $("#endpoint").value = config.endpoint || DEFAULT_APPS_SCRIPT_URL;
+try {
+  deploymentUrl($("#endpoint").value.trim());
+} catch {
+  $("#connection-settings").open = true;
+}
 for (const id of ["#username", "#endpoint"])
   $(id).addEventListener("input", controls);
 $("#online-login").addEventListener("click", () => {
@@ -459,6 +464,12 @@ function controls() {
         : "disconnected",
   );
   $("#sign-in").disabled = loading;
+  $("#saved-connection-notice").hidden = !(
+    DEFAULT_APPS_SCRIPT_URL &&
+    config.endpoint &&
+    config.endpoint !== DEFAULT_APPS_SCRIPT_URL &&
+    $("#endpoint").value.trim() === config.endpoint
+  );
   $("#connect-form").setAttribute("aria-busy", String(loading));
   $("#count-bar").hidden = !has || page !== "stock";
   $("#synchronize-quantity").disabled =
@@ -514,8 +525,14 @@ function controls() {
 async function login() {
   if (loading) return;
   const username = $("#username").value.trim().toLowerCase(),
-    password = $("#password").value,
+    password = $("#password").value;
+  let endpoint;
+  try {
     endpoint = deploymentUrl($("#endpoint").value.trim()).href;
+  } catch (error) {
+    $("#connection-settings").open = true;
+    throw error;
+  }
   if (!username || !password) throw Error("INVALID_REQUIRED");
   const epoch = ++generation;
   loading = true;

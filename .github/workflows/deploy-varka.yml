@@ -1,9 +1,11 @@
 name: Deploy VARKA
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
-# Google credentials are available only to one step of the approved release job.
+# Google credentials are available only to one step after verification succeeds.
 # Configure the github-pages environment to allow deployments from main only.
 permissions: {}
 
@@ -63,6 +65,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Require current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-current-main.js
       - name: Update existing Apps Script deployment
         id: apps_script
         env:

@@ -2,7 +2,7 @@
 
 The main Google PWA now has **Stock, Catalog, Team, and Profile**. Counting is always available; no session must be started. This implementation targets the currently used Google-backed application, not the separate Node/SQLite application. It adds no hosting service or third-party proxy.
 
-For coordinated backend/frontend updates, follow [Deploy VARKA · one release button](release-automation.md). Once the owner configures Google authorization and the existing project/deployment IDs, that manual workflow performs the Apps Script version update and Pages publication together, with a stable default URL. The per-version manual upgrade instructions below remain available for initial setup and recovery; do not run installers or recreate deployments for routine automated releases.
+For coordinated backend/frontend updates, follow [Deploy VARKA · automatic releases](release-automation.md). Once the owner configures Google authorization and the existing project/deployment IDs, pushes or merges to **main** run the tests and release Apps Script and Pages together without a separate environment review. The workflow supplies the stable deployment URL; ordinary sign-in only needs staff email and access code. The per-version manual upgrade instructions below remain available for initial setup and recovery; do not run installers or recreate deployments for routine automated releases.
 
 ## Workspace v4.5 · unit replacement, fractional pieces, and expiry warning
 
