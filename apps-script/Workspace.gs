@@ -84,6 +84,53 @@ function workspaceHash_(value) {
     .map((n) => ("0" + ((n + 256) % 256).toString(16)).slice(-2))
     .join("");
 }
+function workspaceRequestHash_(request) {
+  // RPC maps do not preserve object-property order. Bind the complete JSON
+  // request values while retaining array order and scalar types. The general
+  // workspaceHash_ stays unchanged for revisions and stored-envelope integrity.
+  const ordered = (value) => {
+    if (Array.isArray(value)) return value.map(ordered);
+    if (value && typeof value === "object") {
+      const result = Object.create(null);
+      Object.keys(value)
+        .sort()
+        .forEach((key) => (result[key] = ordered(value[key])));
+      return result;
+    }
+    return value;
+  };
+  return workspaceHash_(ordered(JSON.parse(JSON.stringify(request))));
+}
+function workspaceReviewedRequestIdentity_(operation, body, canonicalHash) {
+  const identity = operation.plan && operation.plan.requestIdentity;
+  // Older rows contain only the order-sensitive digest, not the full request.
+  // An owner may bind one reviewed legacy operation to its canonical request;
+  // ordinary requests cannot create or update this private plan metadata.
+  return !!(
+    identity &&
+    identity.scheme === "workspace-request-v1" &&
+    operation.kind === "count" &&
+    operation.result &&
+    operation.result.id === operation.id &&
+    operation.result.state === "COMMITTED" &&
+    Array.isArray(operation.result.accepted) &&
+    operation.result.accepted.length > 0 &&
+    Array.isArray(operation.result.failed) &&
+    operation.result.failed.length === 0 &&
+    Array.isArray(operation.result.conflicted) &&
+    operation.result.conflicted.length === 0 &&
+    body.id === operation.id &&
+    identity.operationId === operation.id &&
+    identity.actor === operation.actor &&
+    identity.kind === operation.kind &&
+    typeof identity.originalHash === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.originalHash) &&
+    identity.originalHash === operation.hash &&
+    typeof identity.canonicalHash === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.canonicalHash) &&
+    identity.canonicalHash === canonicalHash
+  );
+}
 function workspaceId_(id) {
   // A bare numeric/scientific-looking ID would be coerced by Sheets. Browser
   // requests use UUIDs; named integrations may use an alphabetic prefix.
@@ -420,13 +467,18 @@ function workspaceWriteResult_(operation, result) {
 }
 function workspacePrior_(id, email, kind, body) {
   const previous = workspaceOperation_(id);
-  if (
-    previous &&
-    (previous.actor !== email ||
-      previous.kind !== kind ||
-      previous.hash !== workspaceHash_(body))
-  )
-    throw Error("REQUEST_ID_REUSED");
+  if (previous) {
+    if (previous.actor !== email || previous.kind !== kind)
+      throw Error("REQUEST_ID_REUSED");
+    if (previous.hash !== workspaceHash_(body)) {
+      const canonicalHash = workspaceRequestHash_(body);
+      if (
+        previous.hash !== canonicalHash &&
+        !workspaceReviewedRequestIdentity_(previous, body, canonicalHash)
+      )
+        throw Error("REQUEST_ID_REUSED");
+    }
+  }
   return previous;
 }
 // Apps Script's source parser rejects arbitrary-precision integer literals.
@@ -600,7 +652,7 @@ function workspaceCount_(email, request) {
       at = new Date().toISOString();
     const originalRows = workspaceProductRows_(),
       operationId = "V5BATCH:" + id,
-      hash = workspaceHash_(request);
+      hash = workspaceRequestHash_(request);
     const reportProducts = workspaceReportProducts_(
       request.notification,
       products,
@@ -1040,7 +1092,7 @@ function workspaceCatalog_(email, request) {
             : workspaceExpirationWarning_(recount.expirationWarning);
         const at = new Date().toISOString();
         const operationId = "V5BATCH:" + id + "-unit";
-        const hash = workspaceHash_(request);
+        const hash = workspaceRequestHash_(request);
         const event = [
           operationId + ":" + product[0],
           at,
@@ -1121,7 +1173,7 @@ function workspaceCatalog_(email, request) {
         id,
         email,
         "catalog",
-        workspaceHash_(request),
+        workspaceRequestHash_(request),
         result,
         plan,
       ),
@@ -1290,7 +1342,7 @@ function workspaceTeam_(email, request) {
       id,
       email,
       "team",
-      workspaceHash_(request),
+      workspaceRequestHash_(request),
       result,
     );
     return result;

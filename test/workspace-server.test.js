@@ -13,6 +13,16 @@ const notificationSource = await readFile(
   "utf8",
 );
 const copy = (value) => JSON.parse(JSON.stringify(value));
+const reordered = (value) =>
+  Array.isArray(value)
+    ? value.map(reordered)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.keys(value)
+            .reverse()
+            .map((key) => [key, reordered(value[key])]),
+        )
+      : value;
 function database({ count = 2, baseline = {} } = {}) {
   const sheets = new Map(),
     properties = new Map([["PWA_WRITES_ENABLED", "true"]]);
@@ -548,6 +558,261 @@ test("committed count retries use same result; actor/body reuse rejected", () =>
     () => db.call("workspaceStatus", { id: request.id }, "other"),
     /OWN_OPERATION_ONLY/,
   );
+});
+test("request identity canonicalizes only JSON object order and keeps revision hashes unchanged", () => {
+  const db = database();
+  const request = { z: [{ b: "1", a: 1 }], a: false };
+  const expected = createHash("sha256")
+    .update('{"a":false,"z":[{"a":1,"b":"1"}]}')
+    .digest("hex");
+  assert.equal(db.context.workspaceRequestHash_(request), expected);
+  assert.equal(db.context.workspaceRequestHash_(reordered(request)), expected);
+  assert.notEqual(
+    db.context.workspaceHash_(request),
+    db.context.workspaceHash_(reordered(request)),
+    "the general revision/envelope hash must retain its existing behavior",
+  );
+  assert.notEqual(
+    db.context.workspaceRequestHash_({ a: [1, 2] }),
+    db.context.workspaceRequestHash_({ a: [2, 1] }),
+  );
+  assert.notEqual(
+    db.context.workspaceRequestHash_({ a: 1 }),
+    db.context.workspaceRequestHash_({ a: "1" }),
+  );
+  assert.notEqual(
+    db.context.workspaceRequestHash_(
+      JSON.parse('{"__proto__":{"a":1},"x":2}'),
+    ),
+    db.context.workspaceRequestHash_({ x: 2 }),
+    "all JSON property names remain part of the identity",
+  );
+});
+test("new counts replay after RPC key reordering while changed values and array order stay rejected", () => {
+  const db = database();
+  const request = db.countRequest(
+    db.load().products.map((product) => ({
+      ...db.item(product, "1.25"),
+      expirationWarning: false,
+      countedAt: "2026-11-05T10:00:00.000Z",
+    })),
+  );
+  request.summary = { entered: 2, uncounted: 0, low: 0 };
+  const result = db.call("workspaceCount", request);
+  const before = copy([...db.sheets.values()].map((sheet) => sheet.values));
+  assert.deepEqual(db.call("workspaceCount", reordered(request)), result);
+  assert.deepEqual(
+    copy([...db.sheets.values()].map((sheet) => sheet.values)),
+    before,
+  );
+  for (const change of [
+    (body) => {
+      body.items[0].locations[0].value = "2";
+    },
+    (body) => {
+      body.items[0].approx = true;
+    },
+    (body) => {
+      body.items[0].catalogVersion = "different";
+    },
+    (body) => {
+      body.items[0].countedAt = "2026-11-05T11:00:00.000Z";
+    },
+    (body) => {
+      body.summary.entered = 3;
+    },
+    (body) => {
+      body.notification.language = "ru";
+    },
+    (body) => {
+      body.items.reverse();
+    },
+    (body) => {
+      body.items[0].locations.reverse();
+    },
+    (body) => {
+      delete body.items[0].expirationWarning;
+    },
+  ]) {
+    const changed = copy(request);
+    change(changed);
+    assert.throws(() => db.call("workspaceCount", changed), /REQUEST_ID_REUSED/);
+  }
+  assert.deepEqual(
+    copy([...db.sheets.values()].map((sheet) => sheet.values)),
+    before,
+  );
+});
+test("catalog, team and owner Telegram test writes use the same canonical request identity", () => {
+  const cases = [
+    [
+      "workspaceCatalog",
+      (db) => ({
+        id: randomUUID(),
+        action: "save",
+        product: { ...db.load().products[0], minimum: 2 },
+      }),
+      "staff",
+    ],
+    [
+      "workspaceTeam",
+      () => ({ id: randomUUID(), kind: "note", text: "Check stock" }),
+      "staff",
+    ],
+    [
+      "workspaceTelegramTest",
+      () => ({ id: randomUUID(), language: "ru" }),
+      "owner",
+    ],
+  ];
+  for (const [method, makeRequest, actor] of cases) {
+    const db = database();
+    const request = makeRequest(db);
+    const result = db.call(method, request, actor);
+    const operations = db.sheets.get("WorkspaceOperations").values;
+    assert.equal(operations[1][3], db.context.workspaceRequestHash_(request));
+    assert.deepEqual(db.call(method, reordered(request), actor), result);
+    assert.equal(operations.length, 2);
+  }
+});
+
+function legacyCount() {
+  const db = database();
+  const request = db.countRequest(
+    db.load().products.map((product) => ({
+      ...db.item(product, "1.25"),
+      expirationWarning: false,
+      countedAt: "2026-11-05T10:00:00.000Z",
+    })),
+  );
+  request.summary = { entered: 2, uncounted: 0, low: 0 };
+  const canonical = db.context.workspaceRequestHash_;
+  db.context.workspaceRequestHash_ = db.context.workspaceHash_;
+  const result = db.call("workspaceCount", request);
+  db.context.workspaceRequestHash_ = canonical;
+  const row = db.sheets.get("WorkspaceOperations").values[1];
+  assert.notEqual(row[3], canonical(request));
+  const plan = JSON.parse(row[6]);
+  const identity = {
+    scheme: "workspace-request-v1",
+    operationId: row[0],
+    actor: row[1],
+    kind: row[2],
+    originalHash: row[3],
+    canonicalHash: canonical(request),
+  };
+  return { db, request, result, row, plan, identity };
+}
+test("legacy raw-hash retries still work and only a reviewed bound identity can recover a reordered legacy count", () => {
+  const { db, request, result, row, plan, identity } = legacyCount();
+  assert.deepEqual(db.call("workspaceCount", request), result);
+  assert.throws(
+    () => db.call("workspaceCount", reordered(request)),
+    /REQUEST_ID_REUSED/,
+  );
+  const originalHash = row[3];
+  const events = copy(db.sheets.get("Events").values);
+  plan.requestIdentity = identity;
+  row[6] = JSON.stringify(plan);
+  assert.deepEqual(db.call("workspaceCount", reordered(request)), result);
+  assert.equal(row[3], originalHash);
+  assert.deepEqual(db.sheets.get("Events").values, events);
+  assert.equal(db.sheets.get("WorkspaceOperations").values.length, 2);
+  assert.throws(
+    () => db.call("workspaceCount", request, "other"),
+    /REQUEST_ID_REUSED/,
+  );
+  assert.throws(
+    () => db.call("workspaceTeam", { ...request, kind: "note", text: "x" }),
+    /REQUEST_ID_REUSED/,
+  );
+});
+test("reviewed legacy identities reject changed values, array order and every corrupt binding", () => {
+  const fixture = legacyCount();
+  const { db, request, row, plan, identity } = fixture;
+  const saveIdentity = (value) => {
+    row[6] = JSON.stringify({ ...plan, requestIdentity: value });
+  };
+  saveIdentity(identity);
+  for (const change of [
+    (body) => {
+      body.items[0].locations[0].value = "2";
+    },
+    (body) => {
+      body.items[0].catalogVersion = "different";
+    },
+    (body) => {
+      body.items[0].countedAt = "2026-11-05T11:00:00.000Z";
+    },
+    (body) => {
+      body.summary.entered = 3;
+    },
+    (body) => {
+      body.notification.language = "ru";
+    },
+    (body) => {
+      body.items.reverse();
+    },
+    (body) => {
+      body.items[0].locations.reverse();
+    },
+    (body) => {
+      body.extra = true;
+    },
+  ]) {
+    const changed = copy(request);
+    change(changed);
+    assert.throws(() => db.call("workspaceCount", changed), /REQUEST_ID_REUSED/);
+  }
+  for (const [key, value] of [
+    ["scheme", "unrecognized"],
+    ["operationId", randomUUID()],
+    ["actor", "other@example.test"],
+    ["kind", "catalog"],
+    ["originalHash", "b".repeat(64)],
+    ["canonicalHash", "c".repeat(64)],
+    ["canonicalHash", null],
+  ]) {
+    saveIdentity({ ...identity, [key]: value });
+    assert.throws(
+      () => db.call("workspaceCount", reordered(request)),
+      /REQUEST_ID_REUSED/,
+    );
+  }
+});
+test("reviewed legacy identity never resumes prepared, empty or partial counts", () => {
+  for (const change of [
+    (result) => {
+      result.state = "PREPARED";
+    },
+    (result) => {
+      result.accepted = [];
+    },
+    (result) => {
+      result.failed = [{ id: "P001", error: "INVALID_COUNT" }];
+    },
+    (result) => {
+      result.conflicted = [{ id: "P001", error: "STOCK_CONFLICT" }];
+    },
+    (result) => {
+      result.id = randomUUID();
+    },
+  ]) {
+    const { db, request, row, plan, identity, result } = legacyCount();
+    plan.requestIdentity = identity;
+    row[6] = JSON.stringify(plan);
+    change(result);
+    row[5] = JSON.stringify(result);
+    const before = copy([...db.sheets.values()].map((sheet) => sheet.values));
+    assert.throws(
+      () => db.call("workspaceCount", reordered(request)),
+      /REQUEST_ID_REUSED/,
+    );
+    assert.deepEqual(
+      copy([...db.sheets.values()].map((sheet) => sheet.values)),
+      before,
+    );
+  }
 });
 test("lost reply immediately after Events append recovers without duplicate stock", () => {
   const db = database(),

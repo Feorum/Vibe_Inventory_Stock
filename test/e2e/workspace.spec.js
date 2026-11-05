@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import AxeBuilder from "@axe-core/playwright";
 
 const endpoint = "https://script.google.com/macros/s/WORKSPACE-TEST/exec";
@@ -12,6 +13,17 @@ const template = await readFile(
   new URL("../../apps-script/PwaBridge.html", import.meta.url),
   "utf8",
 );
+
+const reverseJsonKeys = (value) =>
+  Array.isArray(value)
+    ? value.map(reverseJsonKeys)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value)
+            .reverse()
+            .map(([key, item]) => [key, reverseJsonKeys(item)]),
+        )
+      : value;
 
 test("a public release default lets a fresh device sign in with only account credentials", async ({
   page,
@@ -274,6 +286,7 @@ async function mockWorkspace(
     profile: { email, name: "Test staff" },
     requests: [],
     committed: new Map(),
+    committedRequests: new Map(),
     catalogCommitted: new Map(),
     history: [],
     notifications: new Map(),
@@ -282,6 +295,8 @@ async function mockWorkspace(
     notificationFail: false,
     notificationUnknown: false,
     countResponseLost: false,
+    countResponseError: null,
+    reorderCountKeys: false,
     catalogResponseLost: false,
     failLoad: false,
     heldCount: null,
@@ -351,7 +366,10 @@ async function mockWorkspace(
     }
     const request = route.request().postDataJSON();
     backend.requests.push(structuredClone(request));
-    const body = request.body || {};
+    const body =
+      request.method === "workspaceCount" && backend.reorderCountKeys
+        ? reverseJsonKeys(request.body || {})
+        : request.body || {};
     let data;
     if (request.method === "ping")
       data = { protocol: 1, workspace: 1, writesEnabled: true };
@@ -375,8 +393,15 @@ async function mockWorkspace(
       data = snapshot();
     } else if (request.method === "workspaceCount") {
       if (backend.heldCount) await backend.heldCount;
-      if (backend.committed.has(body.id)) data = backend.committed.get(body.id);
-      else {
+      if (backend.committed.has(body.id)) {
+        if (!isDeepStrictEqual(body, backend.committedRequests.get(body.id))) {
+          await route.fulfill({
+            json: { ok: false, error: "REQUEST_ID_REUSED" },
+          });
+          return;
+        }
+        data = backend.committed.get(body.id);
+      } else {
         data = {
           id: body.id,
           state: "COMMITTED",
@@ -432,7 +457,14 @@ async function mockWorkspace(
           backend.saves++;
         }
         backend.committed.set(body.id, structuredClone(data));
+        backend.committedRequests.set(body.id, structuredClone(body));
         backend.notifications.set(body.id, { status: "READY" });
+      }
+      if (backend.countResponseError) {
+        const error = backend.countResponseError;
+        backend.countResponseError = null;
+        await route.fulfill({ json: { ok: false, error } });
+        return;
       }
       if (backend.countResponseLost) {
         backend.countResponseLost = false;
@@ -952,6 +984,120 @@ test("a lost count response retries its original ID and Telegram failure never r
   await page.getByRole("button", { name: /Retry.*notification/i }).click();
   await expect.poll(() => backend.telegramSends).toBe(1);
   expect(backend.saves).toBe(1);
+});
+
+test("a committed count with an identity error preserves its frozen request across reload and accepts a same-value reordered retry once", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.countResponseError = "REQUEST_ID_REUSED";
+  backend.notificationFail = true;
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page);
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(1);
+  await expect(page.locator("#message")).toContainText(
+    "This request ID belongs to different data.",
+  );
+  const original = structuredClone(
+    backend.requests.find((request) => request.method === "workspaceCount")
+      .body,
+  );
+  const key = `varka-workspace:${JSON.stringify([endpoint, backend.databaseId, email])}`;
+  const stored = () =>
+    page.evaluate((key) => JSON.parse(localStorage.getItem(key)), key);
+  expect((await stored()).pending).toEqual(original);
+  expect(backend.telegramSends).toBe(0);
+  await card(page, "P001").locator('[data-zone="fridge"]').fill("9");
+  const newerDraft = (await stored()).drafts.P001;
+  expect(newerDraft.editVersion).not.toBe(original.items[0].editVersion);
+  expect((await stored()).pending).toEqual(original);
+
+  await page.reload();
+  await login(page);
+  expect((await stored()).pending).toEqual(original);
+  await expect(card(page, "P001").locator('[data-zone="fridge"]')).toHaveValue(
+    "9",
+  );
+  // Model Google RPC rehydrating object maps in another property order. The
+  // client still sends its saved body; the backend compares JSON values.
+  backend.reorderCountKeys = true;
+  await page.getByRole("button", { name: "Retry safely", exact: true }).click();
+  await expect(page.locator("#pending-panel")).not.toBeVisible();
+  await expect
+    .poll(() =>
+      backend.requests.filter((request) => request.method === "workspaceNotify")
+        .length,
+    )
+    .toBe(1);
+  const requests = backend.requests.filter(
+    (request) => request.method === "workspaceCount",
+  );
+  expect(requests).toHaveLength(2);
+  expect(JSON.stringify(requests[1].body)).toBe(JSON.stringify(original));
+  expect(backend.saves).toBe(1);
+  expect(backend.committed.size).toBe(1);
+  expect(backend.products[0].last).toBe(1.25);
+  expect(backend.telegramSends).toBe(0);
+  expect(
+    backend.requests.filter((request) => request.method === "workspaceStatus"),
+  ).toHaveLength(0);
+  const recovered = await stored();
+  expect(recovered.pending).toBeNull();
+  expect(recovered.drafts.P001.editVersion).toBe(newerDraft.editVersion);
+  expect(recovered.drafts.P001.locations.fridge.value).toBe("9");
+  expect(recovered.drafts.P001.stockVersion).toBe(
+    backend.products[0].stockVersion,
+  );
+});
+
+test("a changed saved count under an existing request ID remains pending instead of accepting an unrelated committed result", async ({
+  page,
+}) => {
+  const backend = await mockWorkspace(page);
+  backend.countResponseLost = true;
+  await page.goto(appPath);
+  await login(page);
+  await enterMilk(page);
+  await send(page);
+  await expect.poll(() => backend.saves).toBe(1);
+  await expect(page.locator("#pending-panel")).toBeVisible();
+  const original = structuredClone(
+    backend.requests.find((request) => request.method === "workspaceCount")
+      .body,
+  );
+  const key = `varka-workspace:${JSON.stringify([endpoint, backend.databaseId, email])}`;
+  const changed = structuredClone(original);
+  changed.items[0].locations[0].value = "99";
+  await page.evaluate(
+    ({ key, changed }) => {
+      const saved = JSON.parse(localStorage.getItem(key));
+      saved.pending = changed;
+      localStorage.setItem(key, JSON.stringify(saved));
+    },
+    { key, changed },
+  );
+  await page.reload();
+  await login(page);
+  await page.getByRole("button", { name: "Retry safely", exact: true }).click();
+  await expect(page.locator("#message")).toContainText(
+    "This request ID belongs to different data.",
+  );
+  await expect(page.locator("#pending-panel")).toBeVisible();
+  const saved = await page.evaluate(
+    (key) => JSON.parse(localStorage.getItem(key)),
+    key,
+  );
+  expect(saved.pending).toEqual(changed);
+  expect(saved.pending.id).toBe(original.id);
+  expect(saved.drafts.P001.locations.fridge.value).toBe("1,25");
+  expect(backend.saves).toBe(1);
+  expect(backend.products[0].last).toBe(1.25);
+  expect(backend.telegramSends).toBe(0);
+  expect(
+    backend.requests.filter((request) => request.method === "workspaceStatus"),
+  ).toHaveLength(0);
 });
 
 test("four-page mobile interface has no overflow, accessible names, visible inactive actions, and complete language switching", async ({

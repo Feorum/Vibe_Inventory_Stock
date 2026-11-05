@@ -310,7 +310,7 @@ function workspaceTelegramTest_(email, request) {
       id,
       email,
       "telegramTest",
-      workspaceHash_(request),
+      workspaceRequestHash_(request),
       {
         id: id,
         state: "COMMITTED",

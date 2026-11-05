@@ -147,6 +147,10 @@ Stock revisions are separate from catalog revisions. A name/category/minimum/int
 
 Requests are persisted locally **before** sending and bound server-side to actor, kind, and SHA-256 digest. A retry uses the same exact body/ID. Durable plans can reconcile interrupted known writes; stale uncommitted work becomes a conflict instead of overwriting someone else's changes. Per-item accepted, failed, and conflicted outcomes are shown. Google Sheets is not an ACID multi-table database: very large submissions may use several ledger envelopes; acknowledged results are per item, not a promise of all-catalog atomicity.
 
+Request digests normalize JSON object-key order recursively, while preserving array order, values, and types. Reordering fields in the Google bridge therefore cannot turn an identical retry into `REQUEST_ID_REUSED`. Existing revision and multipart-integrity digests keep their original format. Legacy request digests still accept exact original serialization; an old order-dependent mismatch requires owner review, not a new request ID or cleared browser storage.
+
+For an already committed legacy count, first download the private pending-count backup and verify its account, database, operation ID, accepted items, edit versions, original revisions, locations, flags, and frozen notification against the retained receipt and plan. A reviewed `plan.requestIdentity` may bind that exact backup's canonical digest to the existing operation, actor, kind, and original digest. It must not change the original digest, result, Events, or envelope bytes. This is a targeted owner repair, with no public repair endpoint or automatic migration of unverified legacy requests. Keep the backup and original plan; a retry confirms the existing count rather than creating another count.
+
 The shared-lock guarantee covers writers in this **same Apps Script project**. Separate projects, direct spreadsheet edits, and old external clients can bypass these safeguards; do not run unsynchronized writers against the same workbook. Stop edits during migration and test the legacy writers you intend to retain.
 
 ### Telegram is a separate outcome

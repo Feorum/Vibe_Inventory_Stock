@@ -56,7 +56,7 @@ function harness(overrides = {}) {
         throw Error("INVALID_ID");
       return id;
     },
-    workspaceHash_: hash,
+    workspaceRequestHash_: hash,
     workspacePrior_: (id, actor, kind, body) => {
       assert.equal(locked, true);
       const operation = operations.get(id);
