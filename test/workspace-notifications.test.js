@@ -16,6 +16,8 @@ function harness(overrides = {}) {
       TELEGRAM_CHAT_ID: "private-test-chat",
       WORKSPACE_INSTALLED: "1",
       PWA_WRITES_ENABLED: "true",
+      WORKSPACE_REMINDER_DAY: "1",
+      WORKSPACE_REMINDER_HOUR: "9",
       ...overrides,
     }),
   );
@@ -26,6 +28,7 @@ function harness(overrides = {}) {
   const triggers = [];
   const calls = [];
   let products = [];
+  let slot = "2026-11-09|1|9";
   let locked = false;
   let nextResponse = () => ({
     getResponseCode: () => 200,
@@ -54,7 +57,7 @@ function harness(overrides = {}) {
       computeDigest: (_algorithm, value) => [
         ...createHash("sha256").update(value, "utf8").digest(),
       ],
-      formatDate: (value) => value.toISOString().replace("T", " ").slice(0, 16),
+      formatDate: (value, zone, format) => format === "yyyy-MM-dd|u|H" ? slot : value.toISOString().replace("T", " ").slice(0, 16),
     },
     v3Lock_: (callback) => {
       assert.equal(locked, false, "must not reenter legacy lock");
@@ -120,6 +123,7 @@ function harness(overrides = {}) {
     properties,
     reminderRows,
     triggers,
+    setSlot: (value) => { slot = value; },
     setProducts: (value) => {
       products = value;
     },
@@ -656,6 +660,8 @@ test("workspace reminder fires only once per successful recount, including same 
       stockVersion: "recount-b",
     },
   ]);
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  h.setSlot("2026-11-16|1|9");
   assert.equal(h.context.workspaceReminderTick().processed, 1);
   assert.equal(h.calls.length, 2);
   assert.equal(h.reminderRows.length, 3);
@@ -691,6 +697,8 @@ test("workspace reminder identity uses recount ID rather than wall-clock or move
   h.setProducts([{ ...due, stockVersion: "v2" }]);
   assert.equal(h.context.workspaceReminderTick().processed, 0);
   h.setProducts([{ ...due, lastCountId: "count-b:P001", stockVersion: "v3" }]);
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  h.setSlot("2026-11-16|1|9");
   assert.equal(h.context.workspaceReminderTick().processed, 1);
   assert.equal(h.calls.length, 2);
 });
@@ -734,4 +742,115 @@ test("workspace reminder delivery rechecks recount identity, activity and interv
     );
     assert.equal(h.calls.length, 0);
   }
+});
+
+test("all due products arrive in one list on the selected local day only", () => {
+  const h = harness();
+  h.setProducts(products.map((product, index) => ({
+    ...product, active: true, reminderHours: 1,
+    lastCountedAt: "2026-01-01T10:00:00Z", lastCountId: `count-${index}`,
+  })));
+  h.setSlot("2026-11-08|7|12");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  h.setSlot("2026-11-09|1|8");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  h.setSlot("2026-11-09|1|9");
+  assert.equal(h.context.workspaceReminderTick().processed, products.length);
+  assert.equal(h.calls.length, 1);
+  const html = JSON.parse(h.calls[0].options.payload).rich_message.html;
+  for (const product of products) assert.ok(html.includes(product.ru));
+  h.setProducts([{ ...products[0], active: true, reminderHours: 1,
+    lastCountedAt: "2026-01-02T10:00:00Z", lastCountId: "new-count" }]);
+  h.setSlot("2026-11-09|1|18");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  assert.equal(h.calls.length, 1);
+  h.setSlot("2026-11-16|1|10");
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+  assert.equal(h.calls.length, 2);
+});
+
+test("missing or invalid schedule never sends, DAILY permits the configured hour", () => {
+  for (const overrides of [
+    { WORKSPACE_REMINDER_DAY: "" }, { WORKSPACE_REMINDER_DAY: "8" },
+    { WORKSPACE_REMINDER_HOUR: "24" }, { WORKSPACE_REMINDER_HOUR: "" },
+  ]) {
+    const h = harness(overrides);
+    h.setProducts([{ ...products[0], reminderHours: 1 }]);
+    assert.equal(h.context.workspaceReminderTick().processed, 0);
+    assert.equal(h.calls.length, 0);
+  }
+  const h = harness({ WORKSPACE_REMINDER_DAY: "DAILY" });
+  h.setProducts([{ ...products[0], reminderHours: 1 }]);
+  h.setSlot("2026-11-12|4|9");
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+});
+
+test("ambiguous digest reservation blocks later-week duplicates even if the row projection is stale", () => {
+  const h = harness();
+  h.setProducts([{ ...products[0], reminderHours: 1 }]);
+  h.setResponse(() => { throw Error("timeout"); });
+  h.context.workspaceReminderTick();
+  h.reminderRows[1][2] = "READY";
+  h.setSlot("2026-11-16|1|9");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  assert.equal(h.calls.length, 1);
+});
+
+test("prepared digest removes recounted members and does not mark those members delivered", () => {
+  const h = harness();
+  const due = products.slice(0, 2).map((product, index) => ({
+    ...product, active: true, reminderHours: 1, lastCountId: `count-${index}`,
+    lastCountedAt: "2026-01-01T10:00:00Z",
+  }));
+  h.setProducts(due);
+  const originalDeliver = h.context.workspaceDeliver_;
+  let captured;
+  h.context.workspaceDeliver_ = (id) => { captured = id; return {status: "DEFERRED"}; };
+  h.context.workspaceReminderTick();
+  h.context.workspaceDeliver_ = originalDeliver;
+  h.setProducts([{ ...due[0], active: false }, due[1]]);
+  assert.equal(originalDeliver(captured, "system:reminders", true).status, "SENT");
+  const html = JSON.parse(h.calls[0].options.payload).rich_message.html;
+  assert.ok(!html.includes(due[0].ru));
+  assert.ok(html.includes(due[1].ru));
+  // The omitted member still needs an alert if it becomes eligible next week.
+  h.setProducts(due);
+  h.setSlot("2026-11-16|1|9");
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+  assert.equal(h.calls.length, 2);
+});
+
+test("a definitely rejected combined list retries once without creating individual messages", () => {
+  const h = harness();
+  h.setProducts(products.map(product => ({ ...product, active: true,
+    reminderHours: 1, lastCountedAt: "2026-01-01T10:00:00Z" })));
+  h.setResponse(() => ({ getResponseCode: () => 429,
+    getContentText: () => JSON.stringify({ok:false}) }));
+  assert.equal(h.context.workspaceReminderTick().results[0].notification.status, "FAILED");
+  h.setResponse(() => ({ getResponseCode: () => 200,
+    getContentText: () => JSON.stringify({ok:true,result:{message_id:7}}) }));
+  h.context.workspaceReminderTick();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.operations.size, 1);
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+});
+
+test("upgrading preserves previously sent individual reminders and batches only unnotified counts", () => {
+  const h = harness();
+  const due = products.slice(0, 2).map((product, index) => ({
+    ...product, active: true, reminderHours: 1, lastCountId: `old-count-${index}`,
+    lastCountedAt: "2026-01-01T10:00:00Z",
+  }));
+  h.operations.set("legacy-reminder", { id: "legacy-reminder",
+    actor: "system:reminders", kind: "reminder", result: {
+      reminder: { productId: due[0].id, countVersion: due[0].lastCountId },
+      notification: {status: "SENT"},
+    }});
+  h.reminderRows.push([due[0].id, due[0].lastCountId, "READY", "legacy-reminder", ""]);
+  h.setProducts(due);
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+  assert.equal(h.calls.length, 1);
+  const html = JSON.parse(h.calls[0].options.payload).rich_message.html;
+  assert.ok(!html.includes(due[0].ru));
+  assert.ok(html.includes(due[1].ru));
 });

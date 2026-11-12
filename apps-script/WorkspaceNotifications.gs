@@ -368,7 +368,26 @@ function workspaceDeliver_(operationId, email, allowReminder) {
           notification.delivery.length !== 1)
       )
         throw Error("INVALID_NOTIFICATION_FORMAT");
-      if (operation.kind === "reminder") {
+      if (operation.kind === "reminder" && operation.result.reminder?.items) {
+        const slot = workspaceReminderSlot_();
+        if (!slot || slot.date !== operation.result.reminder.date)
+          return { done: { status: "DEFERRED", error: "REMINDER_NOT_SCHEDULED" } };
+        const due = workspaceReminderProducts_(operation.id);
+        const items = operation.result.reminder.items;
+        const current = due.filter((product) => items.some((item) =>
+          item.productId === product.id &&
+          item.countVersion === (product.lastCountId || product.lastCountedAt),
+        ));
+        if (!current.length)
+          return { done: { status: "DEFERRED", error: "REMINDER_NOT_DUE" } };
+        // Refresh the frozen membership immediately before reserving delivery;
+        // products recounted or disabled since preparation must not be listed.
+        operation.result.reminder.items = current.map(workspaceReminderItem_);
+        const fresh = workspaceReminderEnvelope_(current);
+        notification.messages = fresh.messages;
+        workspaceWriteResult_(operation, operation.result);
+      }
+      if (operation.kind === "reminder" && !operation.result.reminder?.items) {
         const reminder = operation.result.reminder;
         if (!reminder || !reminder.productId || !reminder.countVersion)
           throw Error("INVALID_REMINDER");
@@ -509,7 +528,7 @@ function workspaceDeliver_(operationId, email, allowReminder) {
 }
 
 function workspaceRemindersConfigured_() {
-  return ScriptApp.getProjectTriggers().some(
+  return !!workspaceReminderSchedule_() && ScriptApp.getProjectTriggers().some(
     (trigger) => trigger.getHandlerFunction() === "workspaceReminderTick_",
   );
 }
@@ -528,8 +547,61 @@ function installWorkspaceReminders() {
   return { configured: workspaceRemindersConfigured_() };
 }
 
-// One deterministic reminder operation per product's successful recount time.
-// A movement, catalog edit, refresh, visit, or failed count cannot reset it.
+// The existing hourly trigger checks a single local-calendar delivery window.
+// Day uses ISO weekdays (1=Monday ... 7=Sunday), or DAILY. Configuration is
+// explicit: no schedule means no automatic reminders, rather than surprise mail.
+function workspaceReminderSchedule_() {
+  const day = prop_().getProperty("WORKSPACE_REMINDER_DAY");
+  const hourText = prop_().getProperty("WORKSPACE_REMINDER_HOUR");
+  if (!/^(?:[1-7]|DAILY)$/.test(day || "") ||
+      !/^(?:[0-9]|1[0-9]|2[0-3])$/.test(hourText || "")) return null;
+  return { day: day, hour: Number(hourText),
+    zone: prop_().getProperty("CAFE_TIMEZONE") || "Europe/Minsk" };
+}
+function workspaceReminderSlot_() {
+  const schedule = workspaceReminderSchedule_();
+  if (!schedule) return null;
+  const parts = Utilities.formatDate(new Date(), schedule.zone, "yyyy-MM-dd|u|H").split("|");
+  if ((schedule.day !== "DAILY" && parts[1] !== schedule.day) || Number(parts[2]) < schedule.hour)
+    return null;
+  return { date: parts[0] };
+}
+function workspaceReminderItem_(product) {
+  return { productId: product.id, countVersion: product.lastCountId || product.lastCountedAt };
+}
+function workspaceReminderProducts_(ownOperationId) {
+  const sheet = book_().getSheetByName("WorkspaceReminders");
+  if (!sheet) throw Error("WORKSPACE_NOT_INSTALLED");
+  const statuses = new Map(), blocked = new Set();
+  for (const row of sheet.getDataRange().getValues().slice(1)) {
+    if (!row[0] || row[3] === ownOperationId) continue;
+    if (!statuses.has(row[3])) {
+      const operation = workspaceOperation_(row[3]);
+      statuses.set(row[3], operation);
+    }
+    // Consult the durable operation as well as its projection: a process may
+    // stop after reserving UNKNOWN but before updating WorkspaceReminders.
+    const prior = statuses.get(row[3]);
+    const members = prior?.result?.reminder?.items;
+    if (members && !members.some(item => item.productId === row[0] && item.countVersion === row[1])) continue;
+    if (["SENT", "UNKNOWN"].includes(prior?.result?.notification?.status || row[2]))
+      blocked.add(JSON.stringify([row[0], row[1]]));
+  }
+  return workspaceProducts_().filter((product) =>
+    product.active && Number(product.reminderHours) > 0 &&
+    product.lastCountedAt && Number.isFinite(Date.parse(product.lastCountedAt)) &&
+    Date.now() >= Date.parse(product.lastCountedAt) + Number(product.reminderHours) * 3600000 &&
+    !blocked.has(JSON.stringify([product.id, product.lastCountId || product.lastCountedAt])),
+  );
+}
+function workspaceReminderEnvelope_(products) {
+  const words = workspaceNotificationWords_("ru");
+  return workspaceNotificationEnvelope_(words.reminder,
+    workspaceNotificationLines_(products, [], "ru", words).concat([words.reminderHelp]),
+    "REMINDER");
+}
+// One combined list per scheduled date. A later recount never creates a second
+// message that day; newly due products wait for the next scheduled date.
 function workspaceReminderTick() {
   v4Owner_();
   return workspaceReminderTick_();
@@ -537,98 +609,49 @@ function workspaceReminderTick() {
 function workspaceReminderTick_() {
   if (prop_().getProperty("WORKSPACE_INSTALLED") !== "1") return;
   if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true") return;
-  const language = "ru";
-  const ids = v3Lock_(() =>
-    workspaceProducts_()
-      .filter(
-        (product) =>
-          product.active &&
-          Number(product.reminderHours) > 0 &&
-          product.lastCountedAt &&
-          Number.isFinite(Date.parse(product.lastCountedAt)) &&
-          Date.now() >=
-            Date.parse(product.lastCountedAt) +
-              Number(product.reminderHours) * 3600000,
-      )
-      .map((product) => product.id),
-  );
-  const results = [];
-  for (const productId of ids) {
-    const operationId = v3Lock_(() => {
-      const product = workspaceProducts_().find(
-        (item) => item.id === productId,
-      );
-      if (
-        !product ||
-        !product.active ||
-        !(Number(product.reminderHours) > 0) ||
-        !product.lastCountedAt ||
-        Date.now() <
-          Date.parse(product.lastCountedAt) +
-            Number(product.reminderHours) * 3600000
-      )
-        return null;
-      const sheet = book_().getSheetByName("WorkspaceReminders");
-      if (!sheet) throw Error("WORKSPACE_NOT_INSTALLED");
-      const version = product.lastCountId || product.lastCountedAt;
-      const rows = sheet.getDataRange().getValues();
-      const index = rows.findIndex(
-        (row, i) => i > 0 && row[0] === product.id && row[1] === version,
-      );
-      const id =
-        "reminder-" + workspaceNotificationHash_(product.id + ":" + version);
-      let operation = workspaceOperation_(id);
-      if (!operation) {
-        const words = workspaceNotificationWords_(language);
-        const lines = workspaceNotificationLines_(
-          [product],
-          [],
-          language,
-          words,
-        );
-        const notification = workspaceNotificationEnvelope_(
-          words.reminder,
-          lines.concat([words.reminderHelp]),
-          "REMINDER",
-        );
-        operation = workspaceAppendOperation_(
-          id,
-          "system:reminders",
-          "reminder",
-          id,
-          {
-            id: id,
-            reminder: { productId: product.id, countVersion: version },
-            notification: notification,
-          },
-        );
+  const slot = workspaceReminderSlot_();
+  if (!slot) return { processed: 0, results: [] };
+  const operationId = v3Lock_(() => {
+    const id = "reminder-digest-" + slot.date;
+    let operation = workspaceOperation_(id);
+    if (operation && ["SENT", "UNKNOWN"].includes(operation.result.notification.status)) return null;
+    if (!operation) {
+      const products = workspaceReminderProducts_();
+      if (!products.length) return null;
+      operation = workspaceAppendOperation_(id, "system:reminders", "reminder", id, {
+        id: id,
+        reminder: { date: slot.date, items: products.map(workspaceReminderItem_) },
+        notification: workspaceReminderEnvelope_(products),
+      });
+    }
+    const sheet = book_().getSheetByName("WorkspaceReminders");
+    const rows = sheet.getDataRange().getValues();
+    for (const item of operation.result.reminder.items) {
+      if (!rows.some((row, i) => i > 0 && row[0] === item.productId &&
+          row[1] === item.countVersion && row[3] === id)) {
+        sheet.appendRow([item.productId, item.countVersion,
+          operation.result.notification.status, id, new Date().toISOString()]);
       }
-      if (index < 0) {
-        sheet.appendRow([
-          product.id,
-          version,
-          operation.result.notification.status,
-          id,
-          new Date().toISOString(),
-        ]);
-        SpreadsheetApp.flush();
-      }
-      const status = operation.result.notification.status;
-      return status === "SENT" || status === "UNKNOWN" ? null : id;
-    });
-    if (!operationId) continue;
-    const result = workspaceDeliver_(operationId, "system:reminders", true);
-    v3Lock_(() => {
-      const sheet = book_().getSheetByName("WorkspaceReminders");
-      const rows = sheet.getDataRange().getValues();
-      const index = rows.findIndex((row, i) => i > 0 && row[3] === operationId);
-      if (index > 0) {
+    }
+    SpreadsheetApp.flush();
+    return id;
+  });
+  if (!operationId) return { processed: 0, results: [] };
+  const result = workspaceDeliver_(operationId, "system:reminders", true);
+  let processed = 0;
+  v3Lock_(() => {
+    const operation = workspaceOperation_(operationId);
+    processed = result.status === "DEFERRED" ? 0 : operation.result.reminder.items.length;
+    const sheet = book_().getSheetByName("WorkspaceReminders");
+    const rows = sheet.getDataRange().getValues();
+    rows.forEach((row, index) => {
+      if (index > 0 && row[3] === operationId &&
+          operation.result.reminder.items.some(item => item.productId === row[0] && item.countVersion === row[1])) {
         sheet.getRange(index + 1, 3).setValue(result.status);
         sheet.getRange(index + 1, 5).setValue(new Date().toISOString());
-        SpreadsheetApp.flush();
       }
     });
-    results.push({ id: productId, notification: result });
-  }
-  return { processed: results.length, results: results };
+    SpreadsheetApp.flush();
+  });
+  return { processed: processed, results: [{ id: operationId, notification: result }] };
 }
