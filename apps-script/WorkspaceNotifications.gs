@@ -548,11 +548,11 @@ function installWorkspaceReminders() {
 }
 
 // The existing hourly trigger checks a single local-calendar delivery window.
-// Day uses ISO weekdays (1=Monday ... 7=Sunday), or DAILY. Configuration is
-// explicit: no schedule means no automatic reminders, rather than surprise mail.
+// Default: one list every due date at 09:00 in the configured cafe timezone.
+// Optional overrides use ISO weekdays (1=Monday ... 7=Sunday), or DAILY.
 function workspaceReminderSchedule_() {
-  const day = prop_().getProperty("WORKSPACE_REMINDER_DAY");
-  const hourText = prop_().getProperty("WORKSPACE_REMINDER_HOUR");
+  const day = prop_().getProperty("WORKSPACE_REMINDER_DAY") ?? "DAILY";
+  const hourText = prop_().getProperty("WORKSPACE_REMINDER_HOUR") ?? "9";
   if (!/^(?:[1-7]|DAILY)$/.test(day || "") ||
       !/^(?:[0-9]|1[0-9]|2[0-3])$/.test(hourText || "")) return null;
   return { day: day, hour: Number(hourText),
@@ -562,7 +562,7 @@ function workspaceReminderSlot_() {
   const schedule = workspaceReminderSchedule_();
   if (!schedule) return null;
   const parts = Utilities.formatDate(new Date(), schedule.zone, "yyyy-MM-dd|u|H").split("|");
-  if ((schedule.day !== "DAILY" && parts[1] !== schedule.day) || Number(parts[2]) < schedule.hour)
+  if ((schedule.day !== "DAILY" && parts[1] !== schedule.day) || Number(parts[2]) !== schedule.hour)
     return null;
   return { date: parts[0] };
 }
@@ -587,10 +587,13 @@ function workspaceReminderProducts_(ownOperationId) {
     if (["SENT", "UNKNOWN"].includes(prior?.result?.notification?.status || row[2]))
       blocked.add(JSON.stringify([row[0], row[1]]));
   }
+  const zone = workspaceReminderSchedule_()?.zone || "Europe/Minsk";
+  const today = Utilities.formatDate(new Date(), zone, "yyyy-MM-dd");
   return workspaceProducts_().filter((product) =>
     product.active && Number(product.reminderHours) > 0 &&
     product.lastCountedAt && Number.isFinite(Date.parse(product.lastCountedAt)) &&
-    Date.now() >= Date.parse(product.lastCountedAt) + Number(product.reminderHours) * 3600000 &&
+    Utilities.formatDate(new Date(Date.parse(product.lastCountedAt) +
+      Number(product.reminderHours) * 3600000), zone, "yyyy-MM-dd") <= today &&
     !blocked.has(JSON.stringify([product.id, product.lastCountId || product.lastCountedAt])),
   );
 }

@@ -57,7 +57,7 @@ function harness(overrides = {}) {
       computeDigest: (_algorithm, value) => [
         ...createHash("sha256").update(value, "utf8").digest(),
       ],
-      formatDate: (value, zone, format) => format === "yyyy-MM-dd|u|H" ? slot : value.toISOString().replace("T", " ").slice(0, 16),
+      formatDate: (value, zone, format) => format === "yyyy-MM-dd|u|H" ? slot : format === "yyyy-MM-dd" ? new Intl.DateTimeFormat("en-CA", {timeZone: zone, year:"numeric",month:"2-digit",day:"2-digit"}).format(value) : value.toISOString().replace("T", " ").slice(0, 16),
     },
     v3Lock_: (callback) => {
       assert.equal(locked, false, "must not reenter legacy lock");
@@ -764,7 +764,7 @@ test("all due products arrive in one list on the selected local day only", () =>
   h.setSlot("2026-11-09|1|18");
   assert.equal(h.context.workspaceReminderTick().processed, 0);
   assert.equal(h.calls.length, 1);
-  h.setSlot("2026-11-16|1|10");
+  h.setSlot("2026-11-16|1|9");
   assert.equal(h.context.workspaceReminderTick().processed, 1);
   assert.equal(h.calls.length, 2);
 });
@@ -853,4 +853,32 @@ test("upgrading preserves previously sent individual reminders and batches only 
   const html = JSON.parse(h.calls[0].options.payload).rich_message.html;
   assert.ok(!html.includes(due[0].ru));
   assert.ok(html.includes(due[1].ru));
+});
+
+test("default 09:00 digest includes deadlines later today in Minsk but excludes tomorrow and stays silent outside the hour", () => {
+  const h = harness();
+  h.properties.delete("WORKSPACE_REMINDER_DAY");
+  h.properties.delete("WORKSPACE_REMINDER_HOUR");
+  const instant = Date.parse("2026-11-12T06:00:00Z");
+  h.context.Date = class extends Date {
+    constructor(...args) { super(...(args.length ? args : [instant])); }
+    static now() { return instant; }
+  };
+  h.setSlot("2026-11-12|4|8");
+  h.setProducts([
+    { ...products[0], active: true, reminderHours: 24,
+      lastCountedAt: "2026-11-11T20:30:00Z", lastCountId: "due-today" },
+    { ...products[1], active: true, reminderHours: 24,
+      lastCountedAt: "2026-11-11T22:00:00Z", lastCountId: "due-tomorrow" },
+  ]);
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  h.setSlot("2026-11-12|4|10");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  assert.equal(h.calls.length, 0);
+  h.setSlot("2026-11-12|4|9");
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+  const html = JSON.parse(h.calls[0].options.payload).rich_message.html;
+  assert.ok(html.includes(products[0].ru));
+  assert.ok(!html.includes(products[1].ru));
+  assert.equal(h.calls.length, 1);
 });
