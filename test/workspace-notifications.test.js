@@ -50,7 +50,7 @@ function harness(overrides = {}) {
     Set,
     Date,
     JSON,
-    prop_: () => ({ getProperty: (key) => properties.get(key) }),
+    prop_: () => ({ getProperty: (key) => properties.get(key), setProperty: (key, value) => properties.set(key, value) }),
     Utilities: {
       DigestAlgorithm: { SHA_256: "sha256" },
       Charset: { UTF_8: "utf8" },
@@ -98,11 +98,15 @@ function harness(overrides = {}) {
     },
     ScriptApp: {
       getProjectTriggers: () => triggers,
+      deleteTrigger: (trigger) => {
+        const index = triggers.indexOf(trigger);
+        if (index >= 0) triggers.splice(index, 1);
+      },
       newTrigger: (name) => ({
         timeBased: () => ({
-          everyHours: (hours) => ({
+          everyMinutes: (minutes) => ({
             create: () => {
-              assert.equal(hours, 1);
+              assert.equal(minutes, 1);
               triggers.push({ getHandlerFunction: () => name });
             },
           }),
@@ -892,4 +896,34 @@ test("an invalid imported reminder interval cannot block the other due products"
   ]);
   assert.equal(h.context.workspaceReminderTick().processed, 1);
   assert.equal(h.calls.length, 1);
+});
+
+test("hourly reminder timers upgrade once before the delivery window and preserve unrelated timers", () => {
+  const h = harness();
+  const unrelated = { getHandlerFunction: () => "formSubmission" };
+  h.triggers.push({getHandlerFunction: () => "workspaceReminderTick_"}, unrelated);
+  h.setSlot("2026-11-09|1|8");
+  assert.equal(h.context.workspaceReminderTick().processed, 0);
+  assert.equal(h.triggers.length, 2);
+  assert.ok(h.triggers.includes(unrelated));
+  const timer = h.triggers.find(t => t !== unrelated);
+  assert.equal(h.properties.get("WORKSPACE_REMINDER_TIMER_VERSION"), "minute-1");
+  h.context.workspaceReminderTick();
+  assert.ok(h.triggers.includes(timer));
+  assert.equal(h.calls.length, 0);
+  // Explicit reinstall also repairs a manually removed timer.
+  h.triggers.splice(h.triggers.indexOf(timer), 1);
+  assert.equal(h.context.installWorkspaceReminders().configured, true);
+  assert.equal(h.triggers.length, 2);
+});
+
+test("failed minute timer creation preserves the old timer for a later retry", () => {
+  const h = harness();
+  const original = {getHandlerFunction: () => "workspaceReminderTick_"};
+  h.triggers.push(original);
+  h.context.ScriptApp.newTrigger = () => { throw Error("quota"); };
+  assert.throws(() => h.context.installWorkspaceReminders(), /quota/);
+  assert.ok(h.triggers.includes(original));
+  assert.equal(h.properties.has("WORKSPACE_REMINDER_TIMER_VERSION"), false);
+  assert.equal(h.calls.length, 0);
 });

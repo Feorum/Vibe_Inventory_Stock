@@ -533,21 +533,35 @@ function workspaceRemindersConfigured_() {
   );
 }
 
-// Explicit owner/editor setup; ordinary browser users cannot call this through
-// the bridge. Installing never sends a message or alters an existing trigger.
+// Upgrade only this workspace's reminder timer. Create the replacement first,
+// so a failed creation leaves the previous timer intact. The daily digest ID
+// prevents duplicate sends if two timer invocations overlap during migration.
+function workspaceEnsureReminderTimer_(force) {
+  if (!force && prop_().getProperty("WORKSPACE_REMINDER_TIMER_VERSION") === "minute-1") return;
+  v3Lock_(() => {
+    if (!force && prop_().getProperty("WORKSPACE_REMINDER_TIMER_VERSION") === "minute-1") return;
+    const previous = ScriptApp.getProjectTriggers().filter(
+      trigger => trigger.getHandlerFunction() === "workspaceReminderTick_",
+    );
+    ScriptApp.newTrigger("workspaceReminderTick_").timeBased().everyMinutes(1).create();
+    previous.forEach(trigger => ScriptApp.deleteTrigger(trigger));
+    prop_().setProperty("WORKSPACE_REMINDER_TIMER_VERSION", "minute-1");
+  });
+}
+// Owner/editor setup. Ordinary browser users cannot install timers through RPC.
 function installWorkspaceReminders() {
   v4Owner_();
   if (prop_().getProperty("WORKSPACE_INSTALLED") !== "1")
     throw Error("WORKSPACE_NOT_INSTALLED");
-  if (!workspaceRemindersConfigured_())
-    ScriptApp.newTrigger("workspaceReminderTick_")
-      .timeBased()
-      .everyHours(1)
-      .create();
+  const hasTimer = ScriptApp.getProjectTriggers().some(
+    trigger => trigger.getHandlerFunction() === "workspaceReminderTick_",
+  );
+  workspaceEnsureReminderTimer_(!hasTimer);
   return { configured: workspaceRemindersConfigured_() };
 }
 
-// The existing hourly trigger checks a single local-calendar delivery window.
+// The minute timer checks the local calendar and sends on the first run
+// at or after 09:00; platform and Telegram latency are not an exact-time SLA.
 // Default: one list every due date at 09:00 in the configured cafe timezone.
 // Optional overrides use ISO weekdays (1=Monday ... 7=Sunday), or DAILY.
 function workspaceReminderSchedule_() {
@@ -614,6 +628,7 @@ function workspaceReminderTick() {
 function workspaceReminderTick_() {
   if (prop_().getProperty("WORKSPACE_INSTALLED") !== "1") return;
   if (prop_().getProperty("PWA_WRITES_ENABLED") !== "true") return;
+  workspaceEnsureReminderTimer_();
   const slot = workspaceReminderSlot_();
   if (!slot) return { processed: 0, results: [] };
   const operationId = v3Lock_(() => {
