@@ -882,3 +882,14 @@ test("default 09:00 digest includes deadlines later today in Minsk but excludes 
   assert.ok(!html.includes(products[1].ru));
   assert.equal(h.calls.length, 1);
 });
+
+test("an invalid imported reminder interval cannot block the other due products", () => {
+  const h = harness();
+  h.setProducts([
+    { ...products[0], active: true, reminderHours: 1e300 },
+    { ...products[1], active: true, reminderHours: 1,
+      lastCountedAt: "2026-01-01T10:00:00Z" },
+  ]);
+  assert.equal(h.context.workspaceReminderTick().processed, 1);
+  assert.equal(h.calls.length, 1);
+});

@@ -592,6 +592,8 @@ function workspaceReminderProducts_(ownOperationId) {
   return workspaceProducts_().filter((product) =>
     product.active && Number(product.reminderHours) > 0 &&
     product.lastCountedAt && Number.isFinite(Date.parse(product.lastCountedAt)) &&
+    Number.isFinite(new Date(Date.parse(product.lastCountedAt) +
+      Number(product.reminderHours) * 3600000).getTime()) &&
     Utilities.formatDate(new Date(Date.parse(product.lastCountedAt) +
       Number(product.reminderHours) * 3600000), zone, "yyyy-MM-dd") <= today &&
     !blocked.has(JSON.stringify([product.id, product.lastCountId || product.lastCountedAt])),
